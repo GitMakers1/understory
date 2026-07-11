@@ -16,12 +16,12 @@ await client.connect(transport);
 const tools = await client.listTools();
 console.log("TOOLS:", tools.tools.map((t) => t.name).join(", "));
 
-const status = await client.callTool({ name: "kb_status", arguments: {} });
+const status = await client.callTool({ name: "memory_status", arguments: {} });
 console.log("STATUS:", (status.content as { text: string }[])[0].text);
 
 if (process.env.OPENROUTER_API_KEY) {
   const q = await client.callTool({
-    name: "kb_query",
+    name: "memory_query",
     arguments: { question: "What is the billing API rate limit?" },
   });
   console.log("QUERY:", (q.content as { text: string }[])[0].text.slice(0, 400));

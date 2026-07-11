@@ -11,7 +11,7 @@ export function buildMcpServer(kb: KnowledgeBase): McpServer {
   const server = new McpServer({ name: "okf-knowledge-agent", version: "0.1.0" });
 
   server.registerTool(
-    "kb_query",
+    "memory_query",
     {
       title: "Query the knowledge base",
       description:
@@ -25,7 +25,7 @@ export function buildMcpServer(kb: KnowledgeBase): McpServer {
   );
 
   server.registerTool(
-    "kb_add",
+    "memory_add",
     {
       title: "Add knowledge",
       description:
@@ -59,7 +59,7 @@ export function buildMcpServer(kb: KnowledgeBase): McpServer {
   );
 
   server.registerTool(
-    "kb_update",
+    "memory_update",
     {
       title: "Update knowledge",
       description:
@@ -79,7 +79,7 @@ export function buildMcpServer(kb: KnowledgeBase): McpServer {
   );
 
   server.registerTool(
-    "kb_status",
+    "memory_status",
     {
       title: "Knowledge base status",
       description:
