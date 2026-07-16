@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { KnowledgeBase, runQuery, runMutation } from "@understory/core";
+import { runQueryCached } from "@understory/core";
 import { buildSeedMemory, seedInstructions } from "./seed.js";
 
 /**
@@ -40,8 +41,10 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
       inputSchema: { question: z.string().describe("The question to answer") },
     },
     async ({ question }) => {
-      const { answer } = await runQuery(kb, question);
-      return { content: [{ type: "text", text: answer }] };
+      const { answer, cached } = await runQueryCached(kb, question);
+      return {
+        content: [{ type: "text", text: cached ? `${answer}\n\n(cached answer)` : answer }],
+      };
     }
   );
 
