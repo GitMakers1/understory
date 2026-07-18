@@ -1,6 +1,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { ProviderName } from "./providers/index.js";
+
+/** Legacy provider shorthand (maps to LLM_PROVIDER env for the legacy path). */
+export type LegacyProviderName = "anthropic" | "openrouter" | "llamacpp" | "deepseek" | "local";
 
 /**
  * Runtime-editable settings, persisted as JSON under
@@ -15,14 +17,43 @@ import type { ProviderName } from "./providers/index.js";
  */
 
 export interface LlmSettings {
-  provider: ProviderName | null;
+  /** Direct endpoint (preferred): maps to LLM_API_BASE_URL / _KEY / _FORMAT. */
+  apiBaseUrl: string | null;
+  apiKey: string | null;
+  apiFormat: "openai" | "anthropic" | null;
   model: string | null;
+  /** Fallback slot: second model tried when the primary errors. */
+  fallbackBaseUrl: string | null;
+  fallbackApiKey: string | null;
+  fallbackFormat: "openai" | "anthropic" | null;
+  fallbackModel: string | null;
+  /** Comma list of modes fallback applies to ("query,mutate,chat" or "*"). */
+  fallbackAllowFor: string | null;
+  fallbackRetry429: boolean | null;
+  /** Legacy provider shorthand (kept for compatibility). */
+  provider: LegacyProviderName | null;
   llamacppBaseUrl: string | null;
   llamacppApiKey: string | null;
   localBaseUrl: string | null;
   localApiKey: string | null;
   anthropicApiKey: string | null;
   openrouterApiKey: string | null;
+}
+
+export interface DreamSettings {
+  /** e.g. "6h" — empty/null disables background dreaming. Applies on restart. */
+  interval: string | null;
+  /** Allow dreams to abstract insights from recent activity. */
+  insights: boolean | null;
+}
+
+export interface CacheSettings {
+  queryCache: boolean | null;
+  /** e.g. "24h" */
+  queryCacheTtl: string | null;
+  hotMemory: boolean | null;
+  /** e.g. "1h" */
+  hotMemoryTtl: string | null;
 }
 
 export interface AgentSettings {
@@ -62,6 +93,8 @@ export interface UnderstorySettings {
   llm: LlmSettings;
   agent: AgentSettings;
   seed: SeedSettings;
+  dream: DreamSettings;
+  cache: CacheSettings;
   prompts: PromptSettings;
   /** Overrides GIT_AUTOCOMMIT env when non-null. Applied on next boot. */
   gitAutocommit: boolean | null;
@@ -171,8 +204,17 @@ How to use your memory:
 export function emptySettings(): UnderstorySettings {
   return {
     llm: {
-      provider: null,
+      apiBaseUrl: null,
+      apiKey: null,
+      apiFormat: null,
       model: null,
+      fallbackBaseUrl: null,
+      fallbackApiKey: null,
+      fallbackFormat: null,
+      fallbackModel: null,
+      fallbackAllowFor: null,
+      fallbackRetry429: null,
+      provider: null,
       llamacppBaseUrl: null,
       llamacppApiKey: null,
       localBaseUrl: null,
@@ -182,6 +224,8 @@ export function emptySettings(): UnderstorySettings {
     },
     agent: { maxSteps: null, mutationTemperature: null, searchLimit: null, maxTraces: null },
     seed: { maxChars: null, maxDescriptionsPerSegment: null },
+    dream: { interval: null, insights: null },
+    cache: { queryCache: null, queryCacheTtl: null, hotMemory: null, hotMemoryTtl: null },
     prompts: {
       system: null,
       modeQuery: null,
@@ -261,14 +305,27 @@ export class SettingsStore {
   }
 
   /**
-   * Env for the provider layer with LLM overrides applied — resolveModel()
-   * already accepts an env object, so settings slot in without touching it.
+   * Env for the provider layer with LLM overrides applied —
+   * resolveModelConfig()/resolveFallbackConfig() accept an env object, so
+   * settings slot in without touching the provider code.
    */
   effectiveEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
     const l = this.settings.llm;
     const env: NodeJS.ProcessEnv = { ...base };
-    if (l.provider) env.LLM_PROVIDER = l.provider;
+    // Direct endpoint (preferred path)
+    if (l.apiBaseUrl) env.LLM_API_BASE_URL = l.apiBaseUrl;
+    if (l.apiKey) env.LLM_API_KEY = l.apiKey;
+    if (l.apiFormat) env.LLM_API_FORMAT = l.apiFormat;
     if (l.model) env.LLM_MODEL = l.model;
+    // Fallback slot
+    if (l.fallbackBaseUrl) env.LLM_FALLBACK_API_BASE_URL = l.fallbackBaseUrl;
+    if (l.fallbackApiKey) env.LLM_FALLBACK_API_KEY = l.fallbackApiKey;
+    if (l.fallbackFormat) env.LLM_FALLBACK_API_FORMAT = l.fallbackFormat;
+    if (l.fallbackModel) env.LLM_FALLBACK_MODEL = l.fallbackModel;
+    if (l.fallbackAllowFor) env.LLM_FALLBACK_ALLOW_FOR = l.fallbackAllowFor;
+    if (l.fallbackRetry429 !== null) env.LLM_FALLBACK_RETRY_429 = String(l.fallbackRetry429);
+    // Legacy provider shorthand
+    if (l.provider) env.LLM_PROVIDER = l.provider;
     if (l.llamacppBaseUrl) env.LLAMACPP_BASE_URL = l.llamacppBaseUrl;
     if (l.llamacppApiKey) env.LLAMACPP_API_KEY = l.llamacppApiKey;
     if (l.localBaseUrl) env.LOCAL_BASE_URL = l.localBaseUrl;
@@ -276,6 +333,22 @@ export class SettingsStore {
     if (l.anthropicApiKey) env.ANTHROPIC_API_KEY = l.anthropicApiKey;
     if (l.openrouterApiKey) env.OPENROUTER_API_KEY = l.openrouterApiKey;
     return env;
+  }
+
+  /**
+   * Boot-time application of settings that modules read straight from
+   * process.env (dreaming interval, query-cache/hot-memory toggles+TTLs).
+   * Call once at server start, AFTER load(). Changes need a restart.
+   */
+  applyProcessEnv(env: NodeJS.ProcessEnv = process.env): void {
+    const d = this.settings.dream;
+    const c = this.settings.cache;
+    if (d.interval !== null) env.DREAM_INTERVAL = d.interval;
+    if (d.insights !== null) env.DREAM_INSIGHTS = String(d.insights);
+    if (c.queryCache !== null) env.QUERY_CACHE = String(c.queryCache);
+    if (c.queryCacheTtl !== null) env.QUERY_CACHE_TTL = c.queryCacheTtl;
+    if (c.hotMemory !== null) env.HOT_MEMORY = String(c.hotMemory);
+    if (c.hotMemoryTtl !== null) env.HOT_MEMORY_TTL = c.hotMemoryTtl;
   }
 }
 
@@ -286,7 +359,7 @@ function mergeSettings(
 ): UnderstorySettings {
   const out = structuredClone(base);
   const p = patch as Partial<UnderstorySettings>;
-  for (const section of ["llm", "agent", "seed", "prompts"] as const) {
+  for (const section of ["llm", "agent", "seed", "dream", "cache", "prompts"] as const) {
     const src = p[section];
     if (!src || typeof src !== "object") continue;
     const dst = out[section] as unknown as Record<string, unknown>;

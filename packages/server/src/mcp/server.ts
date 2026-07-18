@@ -6,6 +6,7 @@ import {
   runMutation,
   renderTemplate,
   DEFAULT_PROMPTS,
+  type MutationOutcome,
   type SettingsStore,
 } from "@understory/core";
 import { buildSeedMemory, seedInstructions, type SeedOptions } from "./seed.js";
@@ -77,6 +78,34 @@ export async function buildMcpServer(kb: KnowledgeBase, store?: SettingsStore): 
     }
   };
 
+  const mutationOutcomeResponse = (outcome: MutationOutcome) => {
+    if (outcome.ok) {
+      const { summary, filesChanged } = outcome.result;
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `${summary}\n\nFiles changed:\n${filesChanged.map((f) => `- ${f}`).join("\n") || "- none"}`,
+          },
+        ],
+      };
+    }
+    if (outcome.status === "partial") {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `⚠ Partial mutation: ${outcome.filesChanged.length} file(s) written before failure.\nFiles: ${outcome.filesChanged.join(", ")}\nError: ${outcome.error}`,
+          },
+        ],
+      };
+    }
+    return {
+      content: [{ type: "text" as const, text: `Mutation failed: ${outcome.error}` }],
+      isError: true,
+    };
+  };
+
   server.registerTool(
     "memory_add",
     {
@@ -100,13 +129,9 @@ export async function buildMcpServer(kb: KnowledgeBase, store?: SettingsStore): 
         CONTENT: content,
         PATH_HINT: suggested_path ? `\n\nIf it fits, place new content at ${suggested_path}.` : "",
       });
-      const { summary, filesChanged } = await runMutation(kb, instruction, agentOptions);
+      const outcome = await runMutation(kb, instruction, agentOptions);
       await refreshSeed();
-      return {
-        content: [
-          { type: "text", text: `${summary}\n\nFiles changed:\n${filesChanged.map((f) => `- ${f}`).join("\n") || "- none"}` },
-        ],
-      };
+      return mutationOutcomeResponse(outcome);
     }
   );
 
@@ -121,13 +146,9 @@ export async function buildMcpServer(kb: KnowledgeBase, store?: SettingsStore): 
       },
     },
     async ({ instruction }) => {
-      const { summary, filesChanged } = await runMutation(kb, instruction, agentOptions);
+      const outcome = await runMutation(kb, instruction, agentOptions);
       await refreshSeed();
-      return {
-        content: [
-          { type: "text", text: `${summary}\n\nFiles changed:\n${filesChanged.map((f) => `- ${f}`).join("\n") || "- none"}` },
-        ],
-      };
+      return mutationOutcomeResponse(outcome);
     }
   );
 
@@ -202,8 +223,10 @@ export async function buildMcpServer(kb: KnowledgeBase, store?: SettingsStore): 
         BROKEN: brokenList,
       });
 
-      const { summary, filesChanged } = await runMutation(kb, instruction, agentOptions);
+      const outcome = await runMutation(kb, instruction, agentOptions);
       await refreshSeed();
+      if (!outcome.ok) return mutationOutcomeResponse(outcome);
+      const { summary, filesChanged } = outcome.result;
       const after = await kb.lint();
       return {
         content: [

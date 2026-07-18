@@ -3,7 +3,12 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
-import { KnowledgeBase, SettingsStore } from "@understory/core";
+import {
+  KnowledgeBase,
+  SettingsStore,
+  resolveFallbackConfig,
+  resolveModelConfig,
+} from "@understory/core";
 import { mcpRouter } from "./mcp/http.js";
 import { browseRouter } from "./api/browse.js";
 import { chatRouter } from "./api/chat.js";
@@ -18,12 +23,35 @@ if (!bundleRoot) {
 
 const store = new SettingsStore(bundleRoot);
 await store.load();
+// Dream/cache knobs are read from process.env by their modules — apply
+// persisted overrides once at boot (changes there need a restart).
+store.applyProcessEnv();
 
 const kb = new KnowledgeBase(bundleRoot, {
   gitAutocommit: store.raw().gitAutocommit ?? process.env.GIT_AUTOCOMMIT === "true",
 });
 
 const app = express();
+
+// Validate LLM config at startup — fail fast with a clear error. Settings
+// overrides (persisted in the bundle) are applied via effectiveEnv.
+try {
+  const env = store.effectiveEnv();
+  const primaryConfig = resolveModelConfig(env);
+  console.log(
+    `[understory] model: ${primaryConfig.format}:${primaryConfig.model || "auto"} @ ${primaryConfig.baseURL}`
+  );
+  const fallbackConfig = resolveFallbackConfig(env);
+  if (fallbackConfig) {
+    console.log(
+      `[understory] fallback: ${fallbackConfig.format}:${fallbackConfig.model || "auto"} @ ${fallbackConfig.baseURL}`
+    );
+  }
+} catch (err) {
+  console.error(`[understory] LLM configuration error: ${(err as Error).message}`);
+  console.error("[understory] Set LLM_API_BASE_URL + LLM_API_KEY, or configure legacy env vars.");
+  process.exit(1);
+}
 
 // Reflect the request origin; expose Mcp-Session-Id so browser MCP clients can
 // read it back off the initialize response.

@@ -1,10 +1,9 @@
 import express, { type Router } from "express";
 import { convertToModelMessages, type UIMessage } from "ai";
-import { streamChat, type KnowledgeBase, type ProviderName, type SettingsStore } from "@understory/core";
+import { streamChat, type KnowledgeBase, type SettingsStore } from "@understory/core";
 
 interface ChatBody {
   messages: UIMessage[];
-  provider?: ProviderName;
   model?: string;
 }
 
@@ -16,9 +15,8 @@ export function chatRouter(kb: KnowledgeBase, store?: SettingsStore): Router {
   const router = express.Router();
 
   router.post("/chat", async (req, res) => {
-    const { messages, provider, model } = req.body as ChatBody;
+    const { messages, model } = req.body as ChatBody;
     const { result } = await streamChat(kb, convertToModelMessages(messages), {
-      provider,
       model,
       settings: store,
     });
