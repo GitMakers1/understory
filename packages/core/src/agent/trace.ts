@@ -92,9 +92,11 @@ const MAX_TRACES = 50;
  */
 export class TraceStore {
   private readonly dir: string;
+  private readonly max: number;
 
-  constructor(bundleRoot: string) {
+  constructor(bundleRoot: string, maxTraces: number = MAX_TRACES) {
     this.dir = path.join(bundleRoot, ".traces");
+    this.max = maxTraces;
   }
 
   async save(trace: QueryTrace): Promise<void> {
@@ -143,12 +145,12 @@ export class TraceStore {
 
   private async prune(): Promise<void> {
     const files = (await fs.readdir(this.dir)).filter((f) => f.endsWith(".json"));
-    if (files.length <= MAX_TRACES) return;
+    if (files.length <= this.max) return;
     const stats = await Promise.all(
       files.map(async (f) => ({ f, mtime: (await fs.stat(path.join(this.dir, f))).mtimeMs }))
     );
     stats.sort((a, b) => a.mtime - b.mtime);
-    for (const { f } of stats.slice(0, stats.length - MAX_TRACES)) {
+    for (const { f } of stats.slice(0, stats.length - this.max)) {
       await fs.unlink(path.join(this.dir, f)).catch(() => {});
     }
   }

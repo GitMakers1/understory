@@ -26,7 +26,7 @@ const logSummary = z
     "One past-tense sentence for the update log, with bundle-relative links, e.g. 'Added [Billing API](/apis/billing-api.md).'"
   );
 
-export function buildReadTools(kb: KnowledgeBase, trace?: TraceRecorder) {
+export function buildReadTools(kb: KnowledgeBase, trace?: TraceRecorder, searchLimit?: number) {
   return {
     search_knowledge: tool({
       description:
@@ -37,7 +37,7 @@ export function buildReadTools(kb: KnowledgeBase, trace?: TraceRecorder) {
         tags: z.array(z.string()).optional().describe("Require ALL of these tags"),
       }),
       execute: async ({ query, type, tags }) => {
-        const hits = await kb.search(query, { type, tags });
+        const hits = await kb.search(query, { type, tags, limit: searchLimit });
         trace?.record("search_knowledge", query, hits.map((h) => h.path));
         if (hits.length > 0) return hits;
         // Keyword miss ≠ knowledge absent. Put the map in the tool result so

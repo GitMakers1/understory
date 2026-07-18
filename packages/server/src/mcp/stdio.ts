@@ -5,7 +5,7 @@
  *     -e LLM_PROVIDER=openrouter -- node <repo>/packages/server/dist/mcp/stdio.js
  */
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { KnowledgeBase } from "@understory/core";
+import { KnowledgeBase, SettingsStore } from "@understory/core";
 import { buildMcpServer } from "./server.js";
 
 const bundleRoot = process.env.BUNDLE_ROOT;
@@ -14,10 +14,13 @@ if (!bundleRoot) {
   process.exit(1);
 }
 
+const store = new SettingsStore(bundleRoot);
+await store.load();
+
 const kb = new KnowledgeBase(bundleRoot, {
-  gitAutocommit: process.env.GIT_AUTOCOMMIT === "true",
+  gitAutocommit: store.raw().gitAutocommit ?? process.env.GIT_AUTOCOMMIT === "true",
 });
-const server = await buildMcpServer(kb);
+const server = await buildMcpServer(kb, store);
 await server.connect(new StdioServerTransport());
 // stdio transport keeps the process alive; logs must go to stderr only.
 console.error(`[understory] serving bundle ${bundleRoot} over stdio`);

@@ -1,7 +1,7 @@
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Request, Response, Router } from "express";
 import express from "express";
-import type { KnowledgeBase } from "@understory/core";
+import type { KnowledgeBase, SettingsStore } from "@understory/core";
 import { buildMcpServer } from "./server.js";
 
 /**
@@ -10,11 +10,11 @@ import { buildMcpServer } from "./server.js";
  * hands the SDK transport the raw Node req/res directly, so there is no
  * hijack/lifecycle glue and CORS is handled by the app-level cors() middleware.
  */
-export function mcpRouter(kb: KnowledgeBase): Router {
+export function mcpRouter(kb: KnowledgeBase, store?: SettingsStore): Router {
   const router = express.Router();
 
   const handle = async (req: Request, res: Response) => {
-    const server = await buildMcpServer(kb);
+    const server = await buildMcpServer(kb, store);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless
       enableJsonResponse: true, // one JSON reply per request — no long-lived SSE

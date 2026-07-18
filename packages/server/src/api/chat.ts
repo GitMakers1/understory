@@ -1,6 +1,6 @@
 import express, { type Router } from "express";
 import { convertToModelMessages, type UIMessage } from "ai";
-import { streamChat, type KnowledgeBase, type ProviderName } from "@understory/core";
+import { streamChat, type KnowledgeBase, type ProviderName, type SettingsStore } from "@understory/core";
 
 interface ChatBody {
   messages: UIMessage[];
@@ -12,7 +12,7 @@ interface ChatBody {
  * Streaming chat endpoint for the web UI (`useChat`). Full agent toolset —
  * the chat exists to exercise the same agent the MCP server uses.
  */
-export function chatRouter(kb: KnowledgeBase): Router {
+export function chatRouter(kb: KnowledgeBase, store?: SettingsStore): Router {
   const router = express.Router();
 
   router.post("/chat", async (req, res) => {
@@ -20,6 +20,7 @@ export function chatRouter(kb: KnowledgeBase): Router {
     const { result } = await streamChat(kb, convertToModelMessages(messages), {
       provider,
       model,
+      settings: store,
     });
     const response = result.toUIMessageStreamResponse();
     res.status(response.status);

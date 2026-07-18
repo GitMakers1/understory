@@ -1,7 +1,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { KnowledgeBase, runQuery, runMutation } from "@understory/core";
-import { buildSeedMemory, seedInstructions } from "./seed.js";
+import {
+  KnowledgeBase,
+  runQuery,
+  runMutation,
+  renderTemplate,
+  DEFAULT_PROMPTS,
+  type SettingsStore,
+} from "@understory/core";
+import { buildSeedMemory, seedInstructions, type SeedOptions } from "./seed.js";
 
 /**
  * Build the OKF MCP server. Each knowledge tool internally drives the LLM
@@ -14,10 +21,19 @@ import { buildSeedMemory, seedInstructions } from "./seed.js";
  * fallback; every tool-calling client loads descriptions). Without it the
  * client model has no signal that memory might hold an answer.
  */
-export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
+export async function buildMcpServer(kb: KnowledgeBase, store?: SettingsStore): Promise<McpServer> {
+  if (store) await store.load();
+  const agentOptions = { settings: store };
+  const seedOptions = (): SeedOptions =>
+    store
+      ? {
+          maxChars: store.seedValue("maxChars"),
+          maxDescriptionsPerSegment: store.seedValue("maxDescriptionsPerSegment"),
+        }
+      : {};
   // Seed generation must never prevent the server from starting — a missing
   // or empty bundle root degrades to a minimal seed, not a crash.
-  const seed = await buildSeedMemory(kb).catch((err: Error) => {
+  const seed = await buildSeedMemory(kb, seedOptions()).catch((err: Error) => {
     console.error(`[understory] seed generation failed: ${err.message}`);
     return "(memory overview unavailable — the bundle may be empty or unreadable; memory_status can diagnose)";
   });
@@ -29,7 +45,7 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
 
   const server = new McpServer(
     { name: "understory", version: "0.1.0" },
-    { instructions: seedInstructions(seed) }
+    { instructions: seedInstructions(seed, store?.prompt("seedInstructions")) }
   );
 
   const queryTool = server.registerTool(
@@ -40,7 +56,7 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
       inputSchema: { question: z.string().describe("The question to answer") },
     },
     async ({ question }) => {
-      const { answer } = await runQuery(kb, question);
+      const { answer } = await runQuery(kb, question, agentOptions);
       return { content: [{ type: "text", text: answer }] };
     }
   );
@@ -54,7 +70,7 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
    */
   const refreshSeed = async () => {
     try {
-      const fresh = await buildSeedMemory(kb);
+      const fresh = await buildSeedMemory(kb, seedOptions());
       queryTool.update({ description: queryDescription(fresh) });
     } catch (err) {
       console.error(`[understory] seed refresh failed: ${(err as Error).message}`);
@@ -79,17 +95,12 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
       // Wrap the payload as an explicit directive. Bare content (e.g. a plain
       // fact like "The user's name is Anirban Kar.") otherwise reads as a chat
       // message and the agent replies conversationally instead of persisting it.
-      const instruction =
-        `Persist the following knowledge into the knowledge base. First search for ` +
-        `related or owning concepts. If this is an attribute or detail of an ` +
-        `existing concept, patch it into that concept rather than creating a new ` +
-        `one. Only a distinct stand-alone entity or substantial topic gets its own ` +
-        `concept — and then you must also patch the related existing concepts to ` +
-        `link back to it. This is content to store, not a message to answer — you ` +
-        `must use the write tools.\n\n` +
-        `KNOWLEDGE TO RECORD:\n${content}` +
-        (suggested_path ? `\n\nIf it fits, place new content at ${suggested_path}.` : "");
-      const { summary, filesChanged } = await runMutation(kb, instruction);
+      const template = store?.prompt("addWrapper") ?? DEFAULT_PROMPTS.addWrapper;
+      const instruction = renderTemplate(template, {
+        CONTENT: content,
+        PATH_HINT: suggested_path ? `\n\nIf it fits, place new content at ${suggested_path}.` : "",
+      });
+      const { summary, filesChanged } = await runMutation(kb, instruction, agentOptions);
       await refreshSeed();
       return {
         content: [
@@ -110,7 +121,7 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
       },
     },
     async ({ instruction }) => {
-      const { summary, filesChanged } = await runMutation(kb, instruction);
+      const { summary, filesChanged } = await runMutation(kb, instruction, agentOptions);
       await refreshSeed();
       return {
         content: [
@@ -185,18 +196,13 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
       const brokenList =
         before.brokenLinks.map((b) => `- ${b.path} → ${b.target} (missing)`).join("\n") ||
         "(none)";
-      const instruction =
-        `Repair the knowledge graph. This is a maintenance task — use the write tools.\n\n` +
-        `ORPHANED CONCEPTS (no other concept links to them). For each, read it and the ` +
-        `concepts it relates to, then wire it in: patch a genuinely related concept to ` +
-        `reference it, and/or add outbound links from it to related concepts. Do NOT ` +
-        `invent relationships that don't exist — if an orphan genuinely relates to ` +
-        `nothing, leave it.\n${orphanList}\n\n` +
-        `BROKEN LINKS (target does not exist). Fix the path if the target was renamed/moved, ` +
-        `or remove the link if the target is gone.\n${brokenList}\n\n` +
-        `Follow the enrich / link-both-ways rules. Read concepts before editing.`;
+      const template = store?.prompt("maintainWrapper") ?? DEFAULT_PROMPTS.maintainWrapper;
+      const instruction = renderTemplate(template, {
+        ORPHANS: orphanList,
+        BROKEN: brokenList,
+      });
 
-      const { summary, filesChanged } = await runMutation(kb, instruction);
+      const { summary, filesChanged } = await runMutation(kb, instruction, agentOptions);
       await refreshSeed();
       const after = await kb.lint();
       return {

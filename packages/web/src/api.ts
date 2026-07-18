@@ -77,6 +77,66 @@ export interface AppConfig {
   defaultModel: string;
 }
 
+// ── Settings ──────────────────────────────────────────────────────────
+
+export interface LlmSettings {
+  provider: string | null;
+  model: string | null;
+  llamacppBaseUrl: string | null;
+  llamacppApiKey: string | null;
+  localBaseUrl: string | null;
+  localApiKey: string | null;
+  anthropicApiKey: string | null;
+  openrouterApiKey: string | null;
+}
+
+export interface AgentSettings {
+  maxSteps: number | null;
+  mutationTemperature: number | null;
+  searchLimit: number | null;
+  maxTraces: number | null;
+}
+
+export interface SeedSettings {
+  maxChars: number | null;
+  maxDescriptionsPerSegment: number | null;
+}
+
+export interface PromptSettings {
+  system: string | null;
+  modeQuery: string | null;
+  modeMutate: string | null;
+  modeChat: string | null;
+  addWrapper: string | null;
+  maintainWrapper: string | null;
+  seedInstructions: string | null;
+}
+
+export interface UnderstorySettings {
+  llm: LlmSettings;
+  agent: AgentSettings;
+  seed: SeedSettings;
+  prompts: PromptSettings;
+  gitAutocommit: boolean | null;
+}
+
+export interface SettingsResponse {
+  settings: UnderstorySettings;
+  defaults: {
+    agent: Record<keyof AgentSettings, number>;
+    seed: Record<keyof SeedSettings, number>;
+    prompts: Record<keyof PromptSettings, string>;
+  };
+  env: {
+    provider: string;
+    model: string;
+    providersWithCredentials: string[];
+    gitAutocommit: boolean;
+  };
+  boot: { bundleRoot: string; port: number; authEnabled: boolean };
+  secretSentinel: string;
+}
+
 const TOKEN_KEY = "understory-token";
 
 export function getAuthToken(): string {
@@ -107,6 +167,16 @@ async function get<T>(url: string): Promise<T> {
   return res.json();
 }
 
+async function put<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(res.status, `${res.status} ${await res.text()}`);
+  return res.json();
+}
+
 export const api = {
   tree: () => get<TreeNode>("/api/tree"),
   concept: (path: string) => get<Concept>(`/api/concept?path=${encodeURIComponent(path)}`),
@@ -117,4 +187,7 @@ export const api = {
   traces: () => get<TraceSummary[]>("/api/traces"),
   trace: (id: string) => get<QueryTrace>(`/api/trace?id=${encodeURIComponent(id)}`),
   config: () => get<AppConfig>("/api/config"),
+  settings: () => get<SettingsResponse>("/api/settings"),
+  saveSettings: (patch: Partial<UnderstorySettings>) =>
+    put<{ settings: UnderstorySettings }>("/api/settings", patch),
 };

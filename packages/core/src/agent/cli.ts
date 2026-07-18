@@ -5,6 +5,7 @@
  *   BUNDLE_ROOT=../sample-bundle pnpm agent:mutate "Add a concept about the users table"
  */
 import { KnowledgeBase } from "../okf/index.js";
+import { SettingsStore } from "../settings.js";
 import { runQuery, runMutation } from "./agent.js";
 
 const [mode, ...rest] = process.argv.slice(2);
@@ -16,16 +17,19 @@ if (!bundleRoot || !input || !["query", "mutate"].includes(mode)) {
   process.exit(1);
 }
 
+const settings = new SettingsStore(bundleRoot);
+await settings.load();
+
 const kb = new KnowledgeBase(bundleRoot, {
-  gitAutocommit: process.env.GIT_AUTOCOMMIT === "true",
+  gitAutocommit: settings.raw().gitAutocommit ?? process.env.GIT_AUTOCOMMIT === "true",
 });
 
 if (mode === "query") {
-  const { answer, steps } = await runQuery(kb, input);
+  const { answer, steps } = await runQuery(kb, input, { settings });
   console.log(answer);
   console.error(`\n[${steps} steps]`);
 } else {
-  const { summary, filesChanged, steps } = await runMutation(kb, input);
+  const { summary, filesChanged, steps } = await runMutation(kb, input, { settings });
   console.log(summary);
   console.error(`\n[${steps} steps] files changed: ${filesChanged.join(", ") || "none"}`);
 }

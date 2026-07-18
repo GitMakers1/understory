@@ -1,8 +1,10 @@
-import type { KnowledgeBase } from "@understory/core";
-import type { TreeNode } from "@understory/core";
+import { DEFAULT_PROMPTS, renderTemplate, SEED_DEFAULTS } from "@understory/core";
+import type { KnowledgeBase, TreeNode } from "@understory/core";
 
-const MAX_SEED_CHARS = 3000;
-const MAX_DESCRIPTIONS_PER_SEGMENT = 10;
+export interface SeedOptions {
+  maxChars?: number;
+  maxDescriptionsPerSegment?: number;
+}
 
 /**
  * Seed memory: a compact overview of what the knowledge base contains,
@@ -14,7 +16,9 @@ const MAX_DESCRIPTIONS_PER_SEGMENT = 10;
  * concept DESCRIPTIONS per segment — semantic hooks beat filenames for
  * igniting the "memory might know this" instinct.
  */
-export async function buildSeedMemory(kb: KnowledgeBase): Promise<string> {
+export async function buildSeedMemory(kb: KnowledgeBase, opts: SeedOptions = {}): Promise<string> {
+  const maxChars = opts.maxChars ?? SEED_DEFAULTS.maxChars;
+  const maxDescriptions = opts.maxDescriptionsPerSegment ?? SEED_DEFAULTS.maxDescriptionsPerSegment;
   const [tree, types, log] = await Promise.all([kb.listTree(), kb.listTypes(), kb.readLog()]);
 
   const segments: string[] = [];
@@ -25,7 +29,7 @@ export async function buildSeedMemory(kb: KnowledgeBase): Promise<string> {
       const collected = collectConcepts(child);
       if (collected.count === 0) continue;
       const typeList = [...collected.types].sort().join(", ");
-      const shown = collected.descriptions.slice(0, MAX_DESCRIPTIONS_PER_SEGMENT);
+      const shown = collected.descriptions.slice(0, maxDescriptions);
       const more = collected.count - shown.length;
       segments.push(
         `* ${child.name}/ — ${collected.count} concept${collected.count === 1 ? "" : "s"}` +
@@ -53,9 +57,9 @@ export async function buildSeedMemory(kb: KnowledgeBase): Promise<string> {
   if (recent.length > 0) sections.push(`Recent activity:\n${recent.join("\n")}`);
 
   let seed = sections.join("\n\n");
-  if (seed.length > MAX_SEED_CHARS) {
+  if (seed.length > maxChars) {
     seed =
-      seed.slice(0, MAX_SEED_CHARS) +
+      seed.slice(0, maxChars) +
       "\n… (truncated — use memory_query to explore further)";
   }
   return seed;
@@ -84,16 +88,6 @@ function collectConcepts(node: TreeNode): {
 }
 
 /** The initialize `instructions` block — seed plus the instinct-igniting rules. */
-export function seedInstructions(seed: string): string {
-  return `This server is your persistent memory — an OKF knowledge base of markdown concepts that survives across sessions.
-
-MEMORY OVERVIEW (as of session start):
-
-${seed}
-
-How to use your memory:
-- BEFORE answering anything related to the topics above, call memory_query — the answer may already be stored. Prefer stored knowledge over guessing.
-- When you learn a lasting fact, decision, preference, or piece of documentation, persist it with memory_add. If it isn't stored, it will be forgotten.
-- When existing knowledge turns out to be wrong or outdated, fix it with memory_update.
-- memory_status reports size and health of the memory.`;
+export function seedInstructions(seed: string, template?: string): string {
+  return renderTemplate(template ?? DEFAULT_PROMPTS.seedInstructions, { SEED: seed });
 }
