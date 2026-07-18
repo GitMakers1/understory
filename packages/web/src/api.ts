@@ -80,14 +80,35 @@ export interface AppConfig {
 // ── Settings ──────────────────────────────────────────────────────────
 
 export interface LlmSettings {
-  provider: string | null;
+  apiBaseUrl: string | null;
+  apiKey: string | null;
+  apiFormat: string | null;
   model: string | null;
+  fallbackBaseUrl: string | null;
+  fallbackApiKey: string | null;
+  fallbackFormat: string | null;
+  fallbackModel: string | null;
+  fallbackAllowFor: string | null;
+  fallbackRetry429: boolean | null;
+  provider: string | null;
   llamacppBaseUrl: string | null;
   llamacppApiKey: string | null;
   localBaseUrl: string | null;
   localApiKey: string | null;
   anthropicApiKey: string | null;
   openrouterApiKey: string | null;
+}
+
+export interface DreamSettings {
+  interval: string | null;
+  insights: boolean | null;
+}
+
+export interface CacheSettings {
+  queryCache: boolean | null;
+  queryCacheTtl: string | null;
+  hotMemory: boolean | null;
+  hotMemoryTtl: string | null;
 }
 
 export interface AgentSettings {
@@ -116,16 +137,24 @@ export interface UnderstorySettings {
   llm: LlmSettings;
   agent: AgentSettings;
   seed: SeedSettings;
+  dream: DreamSettings;
+  cache: CacheSettings;
   prompts: PromptSettings;
   gitAutocommit: boolean | null;
 }
 
-export interface EffectiveSettings {
-  provider: string;
+export interface EffectiveEndpoint {
+  baseURL: string;
+  format: string;
   model: string;
+}
+
+export interface EffectiveSettings {
+  primary: EffectiveEndpoint | null;
+  fallback: EffectiveEndpoint | null;
   modelAutoDiscovered: boolean;
-  llamacppBaseUrl: string | null;
-  localBaseUrl: string | null;
+  configError: string | null;
+  legacyProvider: string | null;
   maxSteps: number;
   mutationTemperature: number;
   searchLimit: number;
@@ -133,8 +162,20 @@ export interface EffectiveSettings {
   seedMaxChars: number;
   seedMaxDescriptionsPerSegment: number;
   gitAutocommit: boolean;
-  keysFromEnv: { anthropic: boolean; openrouter: boolean; llamacpp: boolean; local: boolean };
-  providersWithCredentials: string[];
+  dreamInterval: string | null;
+  dreamInsights: boolean;
+  queryCache: boolean;
+  queryCacheTtl: string;
+  hotMemory: boolean;
+  hotMemoryTtl: string;
+  keysFromEnv: {
+    api: boolean;
+    fallback: boolean;
+    anthropic: boolean;
+    openrouter: boolean;
+    llamacpp: boolean;
+    local: boolean;
+  };
 }
 
 export interface SettingsResponse {

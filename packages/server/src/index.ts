@@ -32,7 +32,7 @@ const kb = new KnowledgeBase(bundleRoot, {
   gitAutocommit: store.raw().gitAutocommit ?? process.env.GIT_AUTOCOMMIT === "true",
 });
 
-startDreamer(kb);
+startDreamer(kb, { settings: store });
 
 const app = express();
 

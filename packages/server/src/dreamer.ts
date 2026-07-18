@@ -1,4 +1,4 @@
-import { parseDuration, runDream, type KnowledgeBase } from "@understory/core";
+import { parseDuration, runDream, type AgentOptions, type KnowledgeBase } from "@understory/core";
 
 const MIN_INTERVAL_MS = 5 * 60_000;
 
@@ -7,7 +7,7 @@ const MIN_INTERVAL_MS = 5 * 60_000;
  * (e.g. "6h"). Opt-in — unset means no background token spend. The first
  * run happens one interval after boot, never at startup.
  */
-export function startDreamer(kb: KnowledgeBase): void {
+export function startDreamer(kb: KnowledgeBase, options: AgentOptions = {}): void {
   const raw = process.env.DREAM_INTERVAL;
   const interval = parseDuration(raw);
   if (!interval) {
@@ -23,7 +23,7 @@ export function startDreamer(kb: KnowledgeBase): void {
     if (busy) return; // never overlap dreams
     busy = true;
     try {
-      const report = await runDream(kb);
+      const report = await runDream(kb, options);
       if (report.ran) {
         console.log(
           `[understory] dream complete: ${report.filesChanged?.length ?? 0} file(s) changed — ${truncate(report.summary ?? "", 200)}`

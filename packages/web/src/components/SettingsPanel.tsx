@@ -8,7 +8,8 @@ import {
   type UnderstorySettings,
 } from "../api";
 
-const PROVIDERS = ["", "anthropic", "openrouter", "llamacpp", "local"] as const;
+const LEGACY_PROVIDERS = ["", "anthropic", "openrouter", "llamacpp", "deepseek", "local"] as const;
+const FORMATS = ["", "openai", "anthropic"] as const;
 
 const PROMPT_LABELS: Record<keyof PromptSettings, { title: string; hint: string }> = {
   system: {
@@ -44,19 +45,13 @@ const SEED_FIELDS: { key: keyof SeedSettings; label: string }[] = [
   { key: "maxDescriptionsPerSegment", label: "Descriptions per segment" },
 ];
 
-const SECRET_FIELDS = [
-  { key: "anthropicApiKey", label: "Anthropic API key", envKey: "anthropic" },
-  { key: "openrouterApiKey", label: "OpenRouter API key", envKey: "openrouter" },
-  { key: "llamacppApiKey", label: "llama.cpp API key", envKey: "llamacpp" },
-  { key: "localApiKey", label: "Local API key", envKey: "local" },
-] as const;
-
 export function SettingsPanel() {
   const [data, setData] = useState<SettingsResponse | null>(null);
   const [draft, setDraft] = useState<UnderstorySettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [openPrompt, setOpenPrompt] = useState<keyof PromptSettings | null>(null);
+  const [showLegacy, setShowLegacy] = useState(false);
 
   const load = () =>
     api
@@ -84,10 +79,9 @@ export function SettingsPanel() {
     setSaving(true);
     setStatus(null);
     try {
-      const res = await api.saveSettings(draft);
-      setData({ ...data, settings: res.settings });
-      setDraft(structuredClone(res.settings));
-      setStatus({ kind: "ok", text: "Saved — applies to the next agent run, no restart needed." });
+      await api.saveSettings(draft);
+      await load(); // re-resolve effective values (model discovery, fallback)
+      setStatus({ kind: "ok", text: "Saved — LLM/agent/prompt changes apply to the next run; dream & cache knobs apply after restart." });
     } catch (e) {
       setStatus({ kind: "err", text: String(e) });
     } finally {
@@ -95,11 +89,7 @@ export function SettingsPanel() {
     }
   };
 
-  const set = <S extends keyof UnderstorySettings>(
-    section: S,
-    key: string,
-    value: unknown
-  ) =>
+  const set = <S extends keyof UnderstorySettings>(section: S, key: string, value: unknown) =>
     setDraft((d) =>
       d
         ? {
@@ -111,6 +101,22 @@ export function SettingsPanel() {
           }
         : d
     );
+
+  const text = (
+    section: "llm" | "dream" | "cache",
+    key: string,
+    value: string | null,
+    placeholder: string,
+    password = false
+  ) => (
+    <input
+      type={password ? "password" : "text"}
+      value={value === data.secretSentinel ? "" : value ?? ""}
+      placeholder={placeholder}
+      onChange={(e) => set(section, key, e.target.value || null)}
+      className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm outline-none focus:border-cyan-600"
+    />
+  );
 
   const numInput = (
     section: "agent" | "seed",
@@ -128,6 +134,27 @@ export function SettingsPanel() {
       className="w-28 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm outline-none focus:border-cyan-600"
     />
   );
+
+  const triToggle = (
+    section: "dream" | "cache",
+    key: string,
+    current: boolean | null,
+    effectiveVal: boolean,
+    label: string
+  ) => (
+    <label className="flex items-center gap-2 text-xs text-zinc-400">
+      <input
+        type="checkbox"
+        checked={current ?? effectiveVal}
+        onChange={(e) => set(section, key, e.target.checked)}
+        className="accent-cyan-600"
+      />
+      {label}
+      {current === null && <span className="text-zinc-600">(default: {String(effectiveVal)})</span>}
+    </label>
+  );
+
+  const eff = data.effective;
 
   return (
     <div className="mx-auto max-w-3xl space-y-8 p-6">
@@ -160,116 +187,220 @@ export function SettingsPanel() {
         <p className="mt-1 text-xs text-zinc-500">
           What the next agent run will actually use (overrides → env → built-in).
         </p>
-        <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
-          <dt className="text-zinc-500">Provider</dt>
-          <dd className="font-mono text-zinc-200">{data.effective.provider}</dd>
-          <dt className="text-zinc-500">Model</dt>
-          <dd className="break-all font-mono text-zinc-200">
-            {data.effective.model}
-            {data.effective.modelAutoDiscovered && (
-              <span className="ml-2 rounded bg-emerald-900/60 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
-                auto-discovered from /v1/models
-              </span>
-            )}
-          </dd>
-          {data.effective.llamacppBaseUrl && (
-            <>
-              <dt className="text-zinc-500">llama.cpp URL</dt>
-              <dd className="font-mono text-zinc-200">{data.effective.llamacppBaseUrl}</dd>
-            </>
-          )}
-          {data.effective.localBaseUrl && (
-            <>
-              <dt className="text-zinc-500">Local URL</dt>
-              <dd className="font-mono text-zinc-200">{data.effective.localBaseUrl}</dd>
-            </>
-          )}
-          <dt className="text-zinc-500">Agent</dt>
-          <dd className="font-mono text-zinc-200">
-            {data.effective.maxSteps} steps · temp {data.effective.mutationTemperature} · search
-            limit {data.effective.searchLimit} · {data.effective.maxTraces} traces kept
-          </dd>
-          <dt className="text-zinc-500">Seed</dt>
-          <dd className="font-mono text-zinc-200">
-            {data.effective.seedMaxChars} chars · {data.effective.seedMaxDescriptionsPerSegment}{" "}
-            descriptions/segment
-          </dd>
-          <dt className="text-zinc-500">Git autocommit</dt>
-          <dd className="font-mono text-zinc-200">{String(data.effective.gitAutocommit)}</dd>
-        </dl>
+        {eff.configError ? (
+          <p className="mt-2 text-xs text-red-400">LLM config error: {eff.configError}</p>
+        ) : (
+          <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
+            <dt className="text-zinc-500">Model</dt>
+            <dd className="break-all font-mono text-zinc-200">
+              {eff.primary ? `${eff.primary.format} @ ${eff.primary.baseURL} → ${eff.primary.model}` : "—"}
+              {eff.modelAutoDiscovered && (
+                <span className="ml-2 rounded bg-emerald-900/60 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
+                  auto-discovered
+                </span>
+              )}
+              {eff.legacyProvider && (
+                <span className="ml-2 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
+                  via legacy {eff.legacyProvider}
+                </span>
+              )}
+            </dd>
+            <dt className="text-zinc-500">Fallback</dt>
+            <dd className="break-all font-mono text-zinc-200">
+              {eff.fallback
+                ? `${eff.fallback.format} @ ${eff.fallback.baseURL} → ${eff.fallback.model}`
+                : "(none configured)"}
+            </dd>
+            <dt className="text-zinc-500">Agent</dt>
+            <dd className="font-mono text-zinc-200">
+              {eff.maxSteps} steps · temp {eff.mutationTemperature} · search limit {eff.searchLimit} ·{" "}
+              {eff.maxTraces} traces
+            </dd>
+            <dt className="text-zinc-500">Memory layers</dt>
+            <dd className="font-mono text-zinc-200">
+              query cache {eff.queryCache ? `on (${eff.queryCacheTtl})` : "off"} · hot memory{" "}
+              {eff.hotMemory ? `on (${eff.hotMemoryTtl})` : "off"}
+            </dd>
+            <dt className="text-zinc-500">Dreaming</dt>
+            <dd className="font-mono text-zinc-200">
+              {eff.dreamInterval ? `every ${eff.dreamInterval}` : "disabled"} · insights{" "}
+              {String(eff.dreamInsights)}
+            </dd>
+            <dt className="text-zinc-500">Git autocommit</dt>
+            <dd className="font-mono text-zinc-200">{String(eff.gitAutocommit)}</dd>
+          </dl>
+        )}
       </section>
 
-      {/* ── LLM provider ── */}
+      {/* ── LLM endpoint ── */}
       <section className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-        <h3 className="text-sm font-semibold text-cyan-300">LLM provider</h3>
+        <h3 className="text-sm font-semibold text-cyan-300">LLM endpoint</h3>
         <p className="text-xs text-zinc-500">
-          Empty field = keep the effective value shown above (from server env). Changes apply to
-          the next agent run.
+          Direct endpoint config. Empty = server env. Changes apply to the next agent run.
         </p>
         <div className="grid grid-cols-2 gap-3">
           <label className="block text-xs text-zinc-400">
-            Provider
+            Base URL
+            {text("llm", "apiBaseUrl", draft.llm.apiBaseUrl, eff.primary?.baseURL ?? "(from env)")}
+          </label>
+          <label className="block text-xs text-zinc-400">
+            Model id
+            {text(
+              "llm",
+              "model",
+              draft.llm.model,
+              eff.primary ? `${eff.primary.model}${eff.modelAutoDiscovered ? " (auto)" : ""}` : "(auto)"
+            )}
+          </label>
+          <label className="block text-xs text-zinc-400">
+            API format
             <select
-              value={draft.llm.provider ?? ""}
-              onChange={(e) => set("llm", "provider", e.target.value || null)}
+              value={draft.llm.apiFormat ?? ""}
+              onChange={(e) => set("llm", "apiFormat", e.target.value || null)}
               className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-200 outline-none focus:border-cyan-600"
             >
-              {PROVIDERS.map((p) => (
-                <option key={p} value={p}>
-                  {p === "" ? `${data.effective.provider} (from env)` : p}
+              {FORMATS.map((f) => (
+                <option key={f} value={f}>
+                  {f === "" ? `${eff.primary?.format ?? "openai"} (default)` : f}
                 </option>
               ))}
             </select>
           </label>
           <label className="block text-xs text-zinc-400">
-            Model id
-            <input
-              value={draft.llm.model ?? ""}
-              placeholder={
-                data.effective.modelAutoDiscovered
-                  ? `${data.effective.model} (auto)`
-                  : data.effective.model
-              }
-              onChange={(e) => set("llm", "model", e.target.value || null)}
-              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm outline-none focus:border-cyan-600"
-            />
+            API key
+            {text(
+              "llm",
+              "apiKey",
+              draft.llm.apiKey,
+              data.settings.llm.apiKey === data.secretSentinel
+                ? "•••••• (stored)"
+                : eff.keysFromEnv.api
+                  ? "•••••• (from env)"
+                  : "(not set)",
+              true
+            )}
+          </label>
+        </div>
+
+        <h4 className="pt-1 text-xs font-semibold text-zinc-300">
+          Fallback model <span className="font-normal text-zinc-500">— tried when the primary errors</span>
+        </h4>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block text-xs text-zinc-400">
+            Fallback base URL
+            {text("llm", "fallbackBaseUrl", draft.llm.fallbackBaseUrl, eff.fallback?.baseURL ?? "(none)")}
           </label>
           <label className="block text-xs text-zinc-400">
-            llama.cpp base URL
-            <input
-              value={draft.llm.llamacppBaseUrl ?? ""}
-              placeholder={data.effective.llamacppBaseUrl ?? "(LLAMACPP_BASE_URL not set)"}
-              onChange={(e) => set("llm", "llamacppBaseUrl", e.target.value || null)}
-              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm outline-none focus:border-cyan-600"
-            />
+            Fallback model id
+            {text("llm", "fallbackModel", draft.llm.fallbackModel, eff.fallback?.model ?? "(auto)")}
           </label>
           <label className="block text-xs text-zinc-400">
-            Local (OpenAI-compat) base URL
-            <input
-              value={draft.llm.localBaseUrl ?? ""}
-              placeholder={data.effective.localBaseUrl ?? "(LOCAL_BASE_URL not set)"}
-              onChange={(e) => set("llm", "localBaseUrl", e.target.value || null)}
-              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm outline-none focus:border-cyan-600"
-            />
+            Fallback format
+            <select
+              value={draft.llm.fallbackFormat ?? ""}
+              onChange={(e) => set("llm", "fallbackFormat", e.target.value || null)}
+              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-200 outline-none focus:border-cyan-600"
+            >
+              {FORMATS.map((f) => (
+                <option key={f} value={f}>
+                  {f === "" ? "openai (default)" : f}
+                </option>
+              ))}
+            </select>
           </label>
-          {SECRET_FIELDS.map(({ key, label, envKey }) => (
-            <label key={key} className="block text-xs text-zinc-400">
-              {label}
-              <input
-                type="password"
-                value={draft.llm[key] === data.secretSentinel ? "" : draft.llm[key] ?? ""}
-                placeholder={
-                  data.settings.llm[key] === data.secretSentinel
-                    ? "•••••• (stored in settings)"
-                    : data.effective.keysFromEnv[envKey]
-                      ? "•••••• (set via server env)"
-                      : "(not set)"
-                }
-                onChange={(e) => set("llm", key, e.target.value || null)}
-                className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm outline-none focus:border-cyan-600"
-              />
+          <label className="block text-xs text-zinc-400">
+            Fallback API key
+            {text(
+              "llm",
+              "fallbackApiKey",
+              draft.llm.fallbackApiKey,
+              data.settings.llm.fallbackApiKey === data.secretSentinel
+                ? "•••••• (stored)"
+                : eff.keysFromEnv.fallback
+                  ? "•••••• (from env)"
+                  : "(not set)",
+              true
+            )}
+          </label>
+          <label className="block text-xs text-zinc-400">
+            Fallback allowed for modes
+            {text("llm", "fallbackAllowFor", draft.llm.fallbackAllowFor, '"*" or "query,mutate,chat"')}
+          </label>
+          <label className="flex items-end gap-2 pb-1 text-xs text-zinc-400">
+            <input
+              type="checkbox"
+              checked={draft.llm.fallbackRetry429 ?? false}
+              onChange={(e) => set("llm", "fallbackRetry429", e.target.checked)}
+              className="accent-cyan-600"
+            />
+            Also fall back on 429 rate limits
+          </label>
+        </div>
+
+        <button
+          onClick={() => setShowLegacy(!showLegacy)}
+          className="text-xs text-zinc-500 underline hover:text-zinc-300"
+        >
+          {showLegacy ? "Hide" : "Show"} legacy provider shorthand
+        </button>
+        {showLegacy && (
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block text-xs text-zinc-400">
+              Legacy provider
+              <select
+                value={draft.llm.provider ?? ""}
+                onChange={(e) => set("llm", "provider", e.target.value || null)}
+                className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-200 outline-none focus:border-cyan-600"
+              >
+                {LEGACY_PROVIDERS.map((p) => (
+                  <option key={p} value={p}>
+                    {p === "" ? (eff.legacyProvider ? `${eff.legacyProvider} (from env)` : "(unset)") : p}
+                  </option>
+                ))}
+              </select>
             </label>
-          ))}
+            <label className="block text-xs text-zinc-400">
+              llama.cpp base URL
+              {text("llm", "llamacppBaseUrl", draft.llm.llamacppBaseUrl, "(env LLAMACPP_BASE_URL)")}
+            </label>
+            <label className="block text-xs text-zinc-400">
+              Anthropic API key
+              {text("llm", "anthropicApiKey", draft.llm.anthropicApiKey,
+                data.settings.llm.anthropicApiKey === data.secretSentinel ? "•••••• (stored)" : eff.keysFromEnv.anthropic ? "•••••• (from env)" : "(not set)", true)}
+            </label>
+            <label className="block text-xs text-zinc-400">
+              OpenRouter API key
+              {text("llm", "openrouterApiKey", draft.llm.openrouterApiKey,
+                data.settings.llm.openrouterApiKey === data.secretSentinel ? "•••••• (stored)" : eff.keysFromEnv.openrouter ? "•••••• (from env)" : "(not set)", true)}
+            </label>
+          </div>
+        )}
+      </section>
+
+      {/* ── Memory layers ── */}
+      <section className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+        <h3 className="text-sm font-semibold text-cyan-300">Memory layers & dreaming</h3>
+        <p className="text-xs text-zinc-500">
+          Query path: exact cache → hot working set → deep agent. Dreaming = scheduled autonomous
+          consolidation (orphans, broken links, duplicates, oversized concepts). These apply on
+          restart.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          {triToggle("cache", "queryCache", draft.cache.queryCache, eff.queryCache, "Exact query cache")}
+          <label className="flex items-center justify-between gap-2 text-xs text-zinc-400">
+            Cache TTL
+            {text("cache", "queryCacheTtl", draft.cache.queryCacheTtl, eff.queryCacheTtl)}
+          </label>
+          {triToggle("cache", "hotMemory", draft.cache.hotMemory, eff.hotMemory, "Hot working-set memory")}
+          <label className="flex items-center justify-between gap-2 text-xs text-zinc-400">
+            Hot TTL
+            {text("cache", "hotMemoryTtl", draft.cache.hotMemoryTtl, eff.hotMemoryTtl)}
+          </label>
+          <label className="flex items-center justify-between gap-2 text-xs text-zinc-400">
+            Dream interval (e.g. 6h, empty = off)
+            {text("dream", "interval", draft.dream.interval, eff.dreamInterval ?? "(disabled)")}
+          </label>
+          {triToggle("dream", "insights", draft.dream.insights, eff.dreamInsights, "Dream insights (abstract patterns)")}
         </div>
       </section>
 
@@ -295,15 +426,13 @@ export function SettingsPanel() {
         <label className="flex items-center gap-2 text-xs text-zinc-400">
           <input
             type="checkbox"
-            checked={draft.gitAutocommit ?? data.effective.gitAutocommit}
-            onChange={(e) => set("gitAutocommit", "", e.target.checked) /* section is scalar */}
+            checked={draft.gitAutocommit ?? eff.gitAutocommit}
+            onChange={(e) => set("gitAutocommit", "", e.target.checked) /* scalar section */}
             className="accent-cyan-600"
           />
           Git autocommit after every mutation (needs git repo in bundle; applies on next boot)
           {draft.gitAutocommit === null && (
-            <span className="text-zinc-600">
-              (env default: {String(data.effective.gitAutocommit)})
-            </span>
+            <span className="text-zinc-600">(default: {String(eff.gitAutocommit)})</span>
           )}
         </label>
       </section>
@@ -365,11 +494,7 @@ export function SettingsPanel() {
         </p>
         <p>
           Port: <code className="text-zinc-300">{data.boot.port}</code> · Auth:{" "}
-          <code className="text-zinc-300">{data.boot.authEnabled ? "bearer token" : "disabled"}</code>{" "}
-          · Providers with credentials:{" "}
-          <code className="text-zinc-300">
-            {data.effective.providersWithCredentials.join(", ") || "(none)"}
-          </code>
+          <code className="text-zinc-300">{data.boot.authEnabled ? "bearer token" : "disabled"}</code>
         </p>
         <p>Set via environment (BUNDLE_ROOT / PORT / AUTH_TOKEN) — change requires restart.</p>
       </section>
