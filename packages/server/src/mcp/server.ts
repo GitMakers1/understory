@@ -2,8 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
   KnowledgeBase,
-  runQuery,
   runMutation,
+  runQueryCached,
   renderTemplate,
   DEFAULT_PROMPTS,
   type MutationOutcome,
@@ -57,8 +57,11 @@ export async function buildMcpServer(kb: KnowledgeBase, store?: SettingsStore): 
       inputSchema: { question: z.string().describe("The question to answer") },
     },
     async ({ question }) => {
-      const { answer } = await runQuery(kb, question, agentOptions);
-      return { content: [{ type: "text", text: answer }] };
+      const { answer, source } = await runQueryCached(kb, question, agentOptions);
+      const marker = source === "cache" ? "\n\n(cached answer)" : source === "hot" ? "\n\n(hot memory)" : "";
+      return {
+        content: [{ type: "text", text: `${answer}${marker}` }],
+      };
     }
   );
 

@@ -14,6 +14,7 @@ import { browseRouter } from "./api/browse.js";
 import { chatRouter } from "./api/chat.js";
 import { settingsRouter } from "./api/settings.js";
 import { bearerAuth } from "./auth.js";
+import { startDreamer } from "./dreamer.js";
 
 const bundleRoot = process.env.BUNDLE_ROOT;
 if (!bundleRoot) {
@@ -30,6 +31,8 @@ store.applyProcessEnv();
 const kb = new KnowledgeBase(bundleRoot, {
   gitAutocommit: store.raw().gitAutocommit ?? process.env.GIT_AUTOCOMMIT === "true",
 });
+
+startDreamer(kb);
 
 const app = express();
 
