@@ -45,10 +45,10 @@ const SEED_FIELDS: { key: keyof SeedSettings; label: string }[] = [
 ];
 
 const SECRET_FIELDS = [
-  { key: "anthropicApiKey", label: "Anthropic API key" },
-  { key: "openrouterApiKey", label: "OpenRouter API key" },
-  { key: "llamacppApiKey", label: "llama.cpp API key" },
-  { key: "localApiKey", label: "Local API key" },
+  { key: "anthropicApiKey", label: "Anthropic API key", envKey: "anthropic" },
+  { key: "openrouterApiKey", label: "OpenRouter API key", envKey: "openrouter" },
+  { key: "llamacppApiKey", label: "llama.cpp API key", envKey: "llamacpp" },
+  { key: "localApiKey", label: "Local API key", envKey: "local" },
 ] as const;
 
 export function SettingsPanel() {
@@ -154,14 +154,57 @@ export function SettingsPanel() {
         </p>
       )}
 
+      {/* ── Effective now ── */}
+      <section className="rounded-xl border border-cyan-900/60 bg-cyan-950/20 p-4">
+        <h3 className="text-sm font-semibold text-cyan-300">Effective right now</h3>
+        <p className="mt-1 text-xs text-zinc-500">
+          What the next agent run will actually use (overrides → env → built-in).
+        </p>
+        <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
+          <dt className="text-zinc-500">Provider</dt>
+          <dd className="font-mono text-zinc-200">{data.effective.provider}</dd>
+          <dt className="text-zinc-500">Model</dt>
+          <dd className="break-all font-mono text-zinc-200">
+            {data.effective.model}
+            {data.effective.modelAutoDiscovered && (
+              <span className="ml-2 rounded bg-emerald-900/60 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
+                auto-discovered from /v1/models
+              </span>
+            )}
+          </dd>
+          {data.effective.llamacppBaseUrl && (
+            <>
+              <dt className="text-zinc-500">llama.cpp URL</dt>
+              <dd className="font-mono text-zinc-200">{data.effective.llamacppBaseUrl}</dd>
+            </>
+          )}
+          {data.effective.localBaseUrl && (
+            <>
+              <dt className="text-zinc-500">Local URL</dt>
+              <dd className="font-mono text-zinc-200">{data.effective.localBaseUrl}</dd>
+            </>
+          )}
+          <dt className="text-zinc-500">Agent</dt>
+          <dd className="font-mono text-zinc-200">
+            {data.effective.maxSteps} steps · temp {data.effective.mutationTemperature} · search
+            limit {data.effective.searchLimit} · {data.effective.maxTraces} traces kept
+          </dd>
+          <dt className="text-zinc-500">Seed</dt>
+          <dd className="font-mono text-zinc-200">
+            {data.effective.seedMaxChars} chars · {data.effective.seedMaxDescriptionsPerSegment}{" "}
+            descriptions/segment
+          </dd>
+          <dt className="text-zinc-500">Git autocommit</dt>
+          <dd className="font-mono text-zinc-200">{String(data.effective.gitAutocommit)}</dd>
+        </dl>
+      </section>
+
       {/* ── LLM provider ── */}
       <section className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
         <h3 className="text-sm font-semibold text-cyan-300">LLM provider</h3>
         <p className="text-xs text-zinc-500">
-          Empty = server environment default (currently{" "}
-          <code className="text-zinc-300">{data.env.provider}</code> /{" "}
-          <code className="text-zinc-300">{data.env.model}</code>). Changes apply to the next agent
-          run.
+          Empty field = keep the effective value shown above (from server env). Changes apply to
+          the next agent run.
         </p>
         <div className="grid grid-cols-2 gap-3">
           <label className="block text-xs text-zinc-400">
@@ -173,7 +216,7 @@ export function SettingsPanel() {
             >
               {PROVIDERS.map((p) => (
                 <option key={p} value={p}>
-                  {p === "" ? `(env default: ${data.env.provider})` : p}
+                  {p === "" ? `${data.effective.provider} (from env)` : p}
                 </option>
               ))}
             </select>
@@ -182,7 +225,11 @@ export function SettingsPanel() {
             Model id
             <input
               value={draft.llm.model ?? ""}
-              placeholder="(auto / provider default)"
+              placeholder={
+                data.effective.modelAutoDiscovered
+                  ? `${data.effective.model} (auto)`
+                  : data.effective.model
+              }
               onChange={(e) => set("llm", "model", e.target.value || null)}
               className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm outline-none focus:border-cyan-600"
             />
@@ -191,7 +238,7 @@ export function SettingsPanel() {
             llama.cpp base URL
             <input
               value={draft.llm.llamacppBaseUrl ?? ""}
-              placeholder="(env LLAMACPP_BASE_URL)"
+              placeholder={data.effective.llamacppBaseUrl ?? "(LLAMACPP_BASE_URL not set)"}
               onChange={(e) => set("llm", "llamacppBaseUrl", e.target.value || null)}
               className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm outline-none focus:border-cyan-600"
             />
@@ -200,19 +247,23 @@ export function SettingsPanel() {
             Local (OpenAI-compat) base URL
             <input
               value={draft.llm.localBaseUrl ?? ""}
-              placeholder="(env LOCAL_BASE_URL)"
+              placeholder={data.effective.localBaseUrl ?? "(LOCAL_BASE_URL not set)"}
               onChange={(e) => set("llm", "localBaseUrl", e.target.value || null)}
               className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm outline-none focus:border-cyan-600"
             />
           </label>
-          {SECRET_FIELDS.map(({ key, label }) => (
+          {SECRET_FIELDS.map(({ key, label, envKey }) => (
             <label key={key} className="block text-xs text-zinc-400">
               {label}
               <input
                 type="password"
                 value={draft.llm[key] === data.secretSentinel ? "" : draft.llm[key] ?? ""}
                 placeholder={
-                  data.settings.llm[key] === data.secretSentinel ? "•••••• (stored)" : "(not set)"
+                  data.settings.llm[key] === data.secretSentinel
+                    ? "•••••• (stored in settings)"
+                    : data.effective.keysFromEnv[envKey]
+                      ? "•••••• (set via server env)"
+                      : "(not set)"
                 }
                 onChange={(e) => set("llm", key, e.target.value || null)}
                 className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm outline-none focus:border-cyan-600"
@@ -244,13 +295,15 @@ export function SettingsPanel() {
         <label className="flex items-center gap-2 text-xs text-zinc-400">
           <input
             type="checkbox"
-            checked={draft.gitAutocommit ?? data.env.gitAutocommit}
+            checked={draft.gitAutocommit ?? data.effective.gitAutocommit}
             onChange={(e) => set("gitAutocommit", "", e.target.checked) /* section is scalar */}
             className="accent-cyan-600"
           />
           Git autocommit after every mutation (needs git repo in bundle; applies on next boot)
           {draft.gitAutocommit === null && (
-            <span className="text-zinc-600">(env default: {String(data.env.gitAutocommit)})</span>
+            <span className="text-zinc-600">
+              (env default: {String(data.effective.gitAutocommit)})
+            </span>
           )}
         </label>
       </section>
@@ -313,9 +366,9 @@ export function SettingsPanel() {
         <p>
           Port: <code className="text-zinc-300">{data.boot.port}</code> · Auth:{" "}
           <code className="text-zinc-300">{data.boot.authEnabled ? "bearer token" : "disabled"}</code>{" "}
-          · Providers with env credentials:{" "}
+          · Providers with credentials:{" "}
           <code className="text-zinc-300">
-            {data.env.providersWithCredentials.join(", ") || "(none)"}
+            {data.effective.providersWithCredentials.join(", ") || "(none)"}
           </code>
         </p>
         <p>Set via environment (BUNDLE_ROOT / PORT / AUTH_TOKEN) — change requires restart.</p>

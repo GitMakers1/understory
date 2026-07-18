@@ -120,6 +120,23 @@ export interface UnderstorySettings {
   gitAutocommit: boolean | null;
 }
 
+export interface EffectiveSettings {
+  provider: string;
+  model: string;
+  modelAutoDiscovered: boolean;
+  llamacppBaseUrl: string | null;
+  localBaseUrl: string | null;
+  maxSteps: number;
+  mutationTemperature: number;
+  searchLimit: number;
+  maxTraces: number;
+  seedMaxChars: number;
+  seedMaxDescriptionsPerSegment: number;
+  gitAutocommit: boolean;
+  keysFromEnv: { anthropic: boolean; openrouter: boolean; llamacpp: boolean; local: boolean };
+  providersWithCredentials: string[];
+}
+
 export interface SettingsResponse {
   settings: UnderstorySettings;
   defaults: {
@@ -127,12 +144,7 @@ export interface SettingsResponse {
     seed: Record<keyof SeedSettings, number>;
     prompts: Record<keyof PromptSettings, string>;
   };
-  env: {
-    provider: string;
-    model: string;
-    providersWithCredentials: string[];
-    gitAutocommit: boolean;
-  };
+  effective: EffectiveSettings;
   boot: { bundleRoot: string; port: number; authEnabled: boolean };
   secretSentinel: string;
 }

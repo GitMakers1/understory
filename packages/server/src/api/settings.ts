@@ -5,6 +5,7 @@ import {
   DEFAULT_PROMPTS,
   loadProviderConfig,
   availableProviders,
+  discoverLlamaCppModel,
   type SettingsStore,
   type UnderstorySettings,
 } from "@understory/core";
@@ -44,7 +45,23 @@ export function settingsRouter(store: SettingsStore, boot: BootInfo): Router {
 
   router.get("/settings", async (_req, res) => {
     await store.load();
-    const envConfig = loadProviderConfig();
+
+    // Resolve what the NEXT agent run will actually use: overrides > env >
+    // built-ins — including the live auto-discovered llama.cpp model id, so
+    // the UI shows real values instead of "(auto)".
+    const effEnv = store.effectiveEnv();
+    const cfg = loadProviderConfig(effEnv);
+    let model = cfg.model;
+    let modelAutoDiscovered = false;
+    if (!model && cfg.provider === "llamacpp" && effEnv.LLAMACPP_BASE_URL) {
+      try {
+        model = await discoverLlamaCppModel(effEnv.LLAMACPP_BASE_URL);
+        modelAutoDiscovered = true;
+      } catch (err) {
+        model = `(discovery failed: ${(err as Error).message})`;
+      }
+    }
+
     res.json({
       settings: redacted(store.raw()),
       defaults: {
@@ -52,11 +69,26 @@ export function settingsRouter(store: SettingsStore, boot: BootInfo): Router {
         seed: SEED_DEFAULTS,
         prompts: DEFAULT_PROMPTS,
       },
-      env: {
-        provider: envConfig.provider,
-        model: envConfig.model || "(auto-discovered)",
-        providersWithCredentials: availableProviders(),
-        gitAutocommit: process.env.GIT_AUTOCOMMIT === "true",
+      effective: {
+        provider: cfg.provider,
+        model: model || "(provider default)",
+        modelAutoDiscovered,
+        llamacppBaseUrl: effEnv.LLAMACPP_BASE_URL ?? null,
+        localBaseUrl: effEnv.LOCAL_BASE_URL ?? null,
+        maxSteps: store.agentValue("maxSteps"),
+        mutationTemperature: store.agentValue("mutationTemperature"),
+        searchLimit: store.agentValue("searchLimit"),
+        maxTraces: store.agentValue("maxTraces"),
+        seedMaxChars: store.seedValue("maxChars"),
+        seedMaxDescriptionsPerSegment: store.seedValue("maxDescriptionsPerSegment"),
+        gitAutocommit: store.raw().gitAutocommit ?? process.env.GIT_AUTOCOMMIT === "true",
+        keysFromEnv: {
+          anthropic: Boolean(process.env.ANTHROPIC_API_KEY),
+          openrouter: Boolean(process.env.OPENROUTER_API_KEY),
+          llamacpp: Boolean(process.env.LLAMACPP_API_KEY),
+          local: Boolean(process.env.LOCAL_API_KEY),
+        },
+        providersWithCredentials: availableProviders(effEnv),
       },
       boot,
       secretSentinel: KEEP,
