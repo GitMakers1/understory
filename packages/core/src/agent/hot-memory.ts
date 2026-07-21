@@ -125,11 +125,19 @@ export async function hotLookup(
 const defaultGenerate: HotGenerate = async (system, prompt, options) => {
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const providers: any = await import("../providers/index.js");
+  // Settings overrides (model id, endpoint) must apply here too — otherwise
+  // hot lookups silently resolve from raw env and can hit a different
+  // backend than the deep agent.
+  let env: NodeJS.ProcessEnv = process.env;
+  if (options.settings) {
+    await options.settings.load();
+    env = options.settings.effectiveEnv();
+  }
   let model;
   if (typeof providers.resolveModel === "function") {
-    model = await providers.resolveModel((options as any).provider, options.model);
+    model = await providers.resolveModel((options as any).provider, options.model, env);
   } else {
-    const cfg = providers.resolveModelConfig(process.env);
+    const cfg = providers.resolveModelConfig(env);
     model = await providers.createModel(options.model ? { ...cfg, model: options.model } : cfg);
   }
   const { generateText } = await import("ai");

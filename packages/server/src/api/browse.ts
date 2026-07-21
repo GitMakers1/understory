@@ -5,10 +5,11 @@ import {
   resolveFallbackConfig,
   resolveModelConfig,
   type KnowledgeBase,
+  type SettingsStore,
 } from "@understory/core";
 
 /** Deterministic browse API — no LLM involved, browsing never costs tokens. */
-export function browseRouter(kb: KnowledgeBase): Router {
+export function browseRouter(kb: KnowledgeBase, store?: SettingsStore): Router {
   const router = express.Router();
 
   router.get("/tree", async (_req, res) => {
@@ -79,8 +80,9 @@ export function browseRouter(kb: KnowledgeBase): Router {
   });
 
   router.get("/config", (_req, res) => {
-    const config = resolveModelConfig();
-    const fallback = resolveFallbackConfig();
+    const env = store?.effectiveEnv() ?? process.env;
+    const config = resolveModelConfig(env);
+    const fallback = resolveFallbackConfig(env);
     res.json({
       model: config.model,
       format: config.format,

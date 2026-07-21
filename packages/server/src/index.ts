@@ -88,7 +88,7 @@ if (authToken) {
 const port = Number(process.env.PORT ?? 3800);
 
 app.use("/mcp", mcpRouter(kb, store));
-app.use("/api", browseRouter(kb));
+app.use("/api", browseRouter(kb, store));
 app.use("/api", chatRouter(kb, store));
 app.use(
   "/api",
