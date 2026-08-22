@@ -10,7 +10,7 @@ import { withFallback } from "../providers/fallback.js";
 import { AGENT_DEFAULTS, type SettingsStore } from "../settings.js";
 import { buildSystemPrompt, type PromptResolver } from "./system-prompt.js";
 import { buildReadTools, buildWriteTools, formatTree } from "./tools.js";
-import { TraceRecorder, TraceStore } from "./trace.js";
+import { TraceRecorder, TraceStore, type TraceUsage } from "./trace.js";
 
 export interface AgentOptions {
   model?: string;
@@ -116,6 +116,23 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Sum token usage across the run's steps (issue #15). Undefined when the provider reports none. */
+function sumStepsUsage(
+  steps: ReadonlyArray<{ usage?: { inputTokens?: number; outputTokens?: number } }>
+): TraceUsage | undefined {
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let reported = false;
+  for (const step of steps) {
+    const u = step.usage;
+    if (!u || (u.inputTokens == null && u.outputTokens == null)) continue;
+    reported = true;
+    inputTokens += u.inputTokens ?? 0;
+    outputTokens += u.outputTokens ?? 0;
+  }
+  return reported ? { inputTokens, outputTokens } : undefined;
+}
+
 /** Read-only Q&A over the bundle. */
 export async function runQuery(
   kb: KnowledgeBase,
@@ -135,7 +152,7 @@ export async function runQuery(
       tools: buildReadTools(kb, recorder, run.searchLimit),
       stopWhen: stepCountIs(run.maxSteps),
     });
-    const trace = recorder.finalize("query", question, result.text, "success", modelChain);
+    const trace = recorder.finalize("query", question, result.text, "success", modelChain, sumStepsUsage(result.steps));
     await run.traces.save(trace);
     return { answer: result.text, steps: result.steps.length, traceId: trace.id };
   } catch (err) {
@@ -169,7 +186,7 @@ export async function runMutation(
       stopWhen: stepCountIs(run.maxSteps),
       temperature: run.mutationTemperature,
     });
-    const trace = recorder.finalize("mutation", instruction, result.text, "success", modelChain);
+    const trace = recorder.finalize("mutation", instruction, result.text, "success", modelChain, sumStepsUsage(result.steps));
     await run.traces.save(trace);
     return {
       ok: true,
@@ -227,10 +244,14 @@ export async function streamChat(
         ...buildWriteTools(kb, filesChanged, recorder),
       },
       stopWhen: stepCountIs(run.maxSteps),
-      onFinish: async ({ text }) => {
+      onFinish: async ({ text, totalUsage }) => {
         // Persist only turns that actually touched the bundle.
         if (recorder.steps.length > 0) {
-          await run.traces.save(recorder.finalize("chat", input, text, "success", modelChain));
+          const usage =
+            totalUsage && (totalUsage.inputTokens != null || totalUsage.outputTokens != null)
+              ? { inputTokens: totalUsage.inputTokens ?? 0, outputTokens: totalUsage.outputTokens ?? 0 }
+              : undefined;
+          await run.traces.save(recorder.finalize("chat", input, text, "success", modelChain, usage));
         }
       },
     });
