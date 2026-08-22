@@ -12,10 +12,16 @@ import { buildSystemPrompt, type PromptResolver } from "./system-prompt.js";
 import { buildReadTools, buildWriteTools, formatTree } from "./tools.js";
 import { TraceRecorder, TraceStore, type TraceUsage } from "./trace.js";
 
+const DEFAULT_TIMEOUT_MS = 120_000;
+
 export interface AgentOptions {
   model?: string;
   /** Live settings (steps, temperature, prompts, LLM overrides). */
   settings?: SettingsStore;
+  /** Cancel the model run when the caller disconnects or explicitly aborts. */
+  abortSignal?: AbortSignal;
+  /** Total deadline for the model run. Defaults to UNDERSTORY_LLM_TIMEOUT_MS or 120 seconds. */
+  timeoutMs?: number;
 }
 
 export interface QueryResult {
@@ -133,6 +139,17 @@ function sumStepsUsage(
   return reported ? { inputTokens, outputTokens } : undefined;
 }
 
+export function modelAbortSignal(options: AgentOptions, env: NodeJS.ProcessEnv = process.env): AbortSignal {
+  const envTimeout = Number(env.UNDERSTORY_LLM_TIMEOUT_MS);
+  const timeoutMs =
+    options.timeoutMs ??
+    (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : DEFAULT_TIMEOUT_MS);
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  return options.abortSignal
+    ? AbortSignal.any([options.abortSignal, timeoutSignal])
+    : timeoutSignal;
+}
+
 /** Read-only Q&A over the bundle. */
 export async function runQuery(
   kb: KnowledgeBase,
@@ -147,6 +164,7 @@ export async function runQuery(
     modelChain = resolved.modelChain;
     const result = await generateText({
       model: resolved.model,
+      abortSignal: modelAbortSignal(options, run.env),
       system: buildSystemPrompt(ctx, run.promptResolver),
       prompt: question,
       tools: buildReadTools(kb, recorder, run.searchLimit),
@@ -177,6 +195,7 @@ export async function runMutation(
     modelChain = resolved.modelChain;
     const result = await generateText({
       model: resolved.model,
+      abortSignal: modelAbortSignal(options, run.env),
       system: buildSystemPrompt(ctx, run.promptResolver),
       prompt: instruction,
       tools: {
@@ -186,6 +205,14 @@ export async function runMutation(
       stopWhen: stepCountIs(run.maxSteps),
       temperature: run.mutationTemperature,
     });
+    if (filesChanged.size === 0) {
+      const message =
+        `Mutation completed without changing any files. Model response: ` +
+        (result.text.trim() || "(empty response)");
+      const trace = recorder.finalize("mutation", instruction, message, "failed", modelChain, sumStepsUsage(result.steps));
+      await run.traces.save(trace);
+      return { ok: false, status: "failed", error: message };
+    }
     const trace = recorder.finalize("mutation", instruction, result.text, "success", modelChain, sumStepsUsage(result.steps));
     await run.traces.save(trace);
     return {
@@ -237,6 +264,7 @@ export async function streamChat(
     modelChain = resolved.modelChain;
     const result = streamText({
       model: resolved.model,
+      abortSignal: modelAbortSignal(options, run.env),
       system: buildSystemPrompt(ctx, run.promptResolver),
       messages,
       tools: {

@@ -22,9 +22,13 @@ import { buildSeedMemory, seedInstructions, type SeedOptions } from "./seed.js";
  * fallback; every tool-calling client loads descriptions). Without it the
  * client model has no signal that memory might hold an answer.
  */
-export async function buildMcpServer(kb: KnowledgeBase, store?: SettingsStore): Promise<McpServer> {
+export async function buildMcpServer(
+  kb: KnowledgeBase,
+  store?: SettingsStore,
+  abortSignal?: AbortSignal
+): Promise<McpServer> {
   if (store) await store.load();
-  const agentOptions = { settings: store };
+  const agentOptions = { settings: store, abortSignal };
   const seedOptions = (): SeedOptions =>
     store
       ? {
