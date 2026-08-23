@@ -22,6 +22,8 @@ export interface AgentOptions {
   abortSignal?: AbortSignal;
   /** Total deadline for the model run. Defaults to UNDERSTORY_LLM_TIMEOUT_MS or 120 seconds. */
   timeoutMs?: number;
+  /** Live per-tool-call observer — lets callers stream progress (e.g. MCP notifications). */
+  onStep?: (step: { seq: number; tool: string; summary: string }) => void;
 }
 
 export interface QueryResult {
@@ -157,7 +159,7 @@ export async function runQuery(
   options: AgentOptions = {}
 ): Promise<QueryResult> {
   const [ctx, run] = await Promise.all([promptContext(kb, "query"), runConfig(kb, options)]);
-  const recorder = new TraceRecorder();
+  const recorder = new TraceRecorder(options.onStep);
   let modelChain: string[] = [];
   try {
     const resolved = await resolveAgentModel(options, "query", run.env);
@@ -187,7 +189,7 @@ export async function runMutation(
   options: AgentOptions = {}
 ): Promise<MutationOutcome> {
   const [ctx, run] = await Promise.all([promptContext(kb, "mutate"), runConfig(kb, options)]);
-  const recorder = new TraceRecorder();
+  const recorder = new TraceRecorder(options.onStep);
   const filesChanged = new Set<string>();
   let modelChain: string[] = [];
   try {
@@ -246,7 +248,7 @@ export async function streamChat(
   options: AgentOptions = {}
 ) {
   const [ctx, run] = await Promise.all([promptContext(kb, "chat"), runConfig(kb, options)]);
-  const recorder = new TraceRecorder();
+  const recorder = new TraceRecorder(options.onStep);
   const filesChanged = new Set<string>();
   let modelChain: string[] = [];
   // The user turn that started this run, for the trace record.

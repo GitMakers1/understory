@@ -21,7 +21,10 @@ export function mcpRouter(kb: KnowledgeBase, store?: SettingsStore): Router {
     const server = await buildMcpServer(kb, store, requestAbort.signal);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless
-      enableJsonResponse: true, // one JSON reply per request — no long-lived SSE
+      // SSE per request (not buffered JSON): progress notifications must reach
+      // the client DURING long agent runs — buffered mode would drop them and
+      // clients would sit blind until their flat timeout kills the call.
+      enableJsonResponse: false,
     });
     res.on("close", () => {
       // If the client disconnects while an LLM call is active, stop that work

@@ -29,6 +29,36 @@ export async function buildMcpServer(
 ): Promise<McpServer> {
   if (store) await store.load();
   const agentOptions = { settings: store, abortSignal };
+
+  /**
+   * Per-request agent options with live progress. When the client sent a
+   * progressToken, every internal tool call streams a notifications/progress —
+   * the user sees the agent working, and spec-compliant clients reset their
+   * request timeout on each notification, so long runs stop dying at the
+   * client's flat timeout.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const withProgress = (extra: any) => {
+    const token = extra?._meta?.progressToken;
+    if (token === undefined || typeof extra?.sendNotification !== "function") {
+      return agentOptions;
+    }
+    return {
+      ...agentOptions,
+      onStep: (step: { seq: number; tool: string; summary: string }) => {
+        void extra
+          .sendNotification({
+            method: "notifications/progress",
+            params: {
+              progressToken: token,
+              progress: step.seq,
+              message: `${step.tool}${step.summary ? `: ${step.summary.slice(0, 80)}` : ""}`,
+            },
+          })
+          .catch(() => {}); // progress is best-effort, never fail the run
+      },
+    };
+  };
   const seedOptions = (): SeedOptions =>
     store
       ? {
@@ -60,12 +90,26 @@ export async function buildMcpServer(
       description: queryDescription(seed),
       inputSchema: { question: z.string().describe("The question to answer") },
     },
-    async ({ question }) => {
-      const { answer, source } = await runQueryCached(kb, question, agentOptions);
-      const marker = source === "cache" ? "\n\n(cached answer)" : source === "hot" ? "\n\n(hot memory)" : "";
-      return {
-        content: [{ type: "text", text: `${answer}${marker}` }],
-      };
+    async ({ question }, extra) => {
+      try {
+        const { answer, source } = await runQueryCached(kb, question, withProgress(extra));
+        const marker = source === "cache" ? "\n\n(cached answer)" : source === "hot" ? "\n\n(hot memory)" : "";
+        return {
+          content: [{ type: "text", text: `${answer}${marker}` }],
+        };
+      } catch (err) {
+        // Aborted/timed-out runs return a readable explanation instead of an
+        // opaque transport error, so the caller knows what happened.
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Memory query did not complete: ${(err as Error).message}. The knowledge base itself is fine — retry, or narrow the question.`,
+            },
+          ],
+          isError: true,
+        };
+      }
     }
   );
 
@@ -127,7 +171,7 @@ export async function buildMcpServer(
           .describe('Optional bundle path hint, e.g. "/apis/payments.md"'),
       },
     },
-    async ({ content, suggested_path }) => {
+    async ({ content, suggested_path }, extra) => {
       // Wrap the payload as an explicit directive. Bare content (e.g. a plain
       // fact like "The user's name is Anirban Kar.") otherwise reads as a chat
       // message and the agent replies conversationally instead of persisting it.
@@ -136,7 +180,7 @@ export async function buildMcpServer(
         CONTENT: content,
         PATH_HINT: suggested_path ? `\n\nIf it fits, place new content at ${suggested_path}.` : "",
       });
-      const outcome = await runMutation(kb, instruction, agentOptions);
+      const outcome = await runMutation(kb, instruction, withProgress(extra));
       await refreshSeed();
       return mutationOutcomeResponse(outcome);
     }
@@ -152,8 +196,8 @@ export async function buildMcpServer(
         instruction: z.string().describe("What to change, in natural language"),
       },
     },
-    async ({ instruction }) => {
-      const outcome = await runMutation(kb, instruction, agentOptions);
+    async ({ instruction }, extra) => {
+      const outcome = await runMutation(kb, instruction, withProgress(extra));
       await refreshSeed();
       return mutationOutcomeResponse(outcome);
     }
@@ -205,7 +249,7 @@ export async function buildMcpServer(
         "Health-check and repair the knowledge graph: an internal agent wires orphaned concepts (nothing links to them) into related concepts and fixes broken links. Run periodically to counter drift. No-op when the graph is already healthy.",
       inputSchema: {},
     },
-    async () => {
+    async (_args, extra) => {
       const before = await kb.lint();
       if (before.healthy) {
         return {
@@ -230,7 +274,7 @@ export async function buildMcpServer(
         BROKEN: brokenList,
       });
 
-      const outcome = await runMutation(kb, instruction, agentOptions);
+      const outcome = await runMutation(kb, instruction, withProgress(extra));
       await refreshSeed();
       if (!outcome.ok) return mutationOutcomeResponse(outcome);
       const { summary, filesChanged } = outcome.result;

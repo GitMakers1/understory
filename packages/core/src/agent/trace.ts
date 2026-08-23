@@ -44,8 +44,13 @@ export class TraceRecorder {
   readonly steps: TraceStep[] = [];
   private readonly t0 = Date.now();
 
+  /** Optional live observer — used to stream progress (e.g. MCP notifications). */
+  constructor(private readonly onRecord?: (step: TraceStep) => void) {}
+
   record(tool: string, summary: string, paths: string[], write = false): void {
-    this.steps.push({ seq: this.steps.length + 1, tool, summary, paths, write });
+    const step: TraceStep = { seq: this.steps.length + 1, tool, summary, paths, write };
+    this.steps.push(step);
+    this.onRecord?.(step);
   }
 
   finalize(
