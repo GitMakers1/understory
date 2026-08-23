@@ -38,6 +38,7 @@ const AGENT_FIELDS: { key: keyof AgentSettings; label: string; step?: string }[]
   { key: "mutationTemperature", label: "Mutation temperature", step: "0.1" },
   { key: "searchLimit", label: "Search result limit" },
   { key: "maxTraces", label: "Trace files kept" },
+  { key: "readExcerptChars", label: "Concept read excerpt (chars)" },
 ];
 
 const SEED_FIELDS: { key: keyof SeedSettings; label: string }[] = [

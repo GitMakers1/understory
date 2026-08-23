@@ -93,6 +93,7 @@ export function settingsRouter(store: SettingsStore, boot: BootInfo): Router {
         mutationTemperature: store.agentValue("mutationTemperature"),
         searchLimit: store.agentValue("searchLimit"),
         maxTraces: store.agentValue("maxTraces"),
+        readExcerptChars: store.agentValue("readExcerptChars"),
         seedMaxChars: store.seedValue("maxChars"),
         seedMaxDescriptionsPerSegment: store.seedValue("maxDescriptionsPerSegment"),
         gitAutocommit: raw.gitAutocommit ?? process.env.GIT_AUTOCOMMIT === "true",
@@ -164,6 +165,13 @@ function validate(patch: Partial<UnderstorySettings>): string | null {
       (!Number.isInteger(a.maxTraces) || a.maxTraces < 1 || a.maxTraces > 5000)
     )
       return "agent.maxTraces must be an integer 1-5000";
+    if (
+      a.readExcerptChars != null &&
+      (!Number.isInteger(a.readExcerptChars) ||
+        a.readExcerptChars < 500 ||
+        a.readExcerptChars > 100000)
+    )
+      return "agent.readExcerptChars must be an integer 500-100000";
   }
   const s = patch.seed;
   if (s) {

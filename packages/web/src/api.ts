@@ -117,6 +117,7 @@ export interface AgentSettings {
   mutationTemperature: number | null;
   searchLimit: number | null;
   maxTraces: number | null;
+  readExcerptChars: number | null;
 }
 
 export interface SeedSettings {
@@ -160,6 +161,7 @@ export interface EffectiveSettings {
   mutationTemperature: number;
   searchLimit: number;
   maxTraces: number;
+  readExcerptChars: number;
   seedMaxChars: number;
   seedMaxDescriptionsPerSegment: number;
   gitAutocommit: boolean;

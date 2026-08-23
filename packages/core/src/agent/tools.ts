@@ -27,7 +27,50 @@ const logSummary = z
     "One past-tense sentence for the update log, with bundle-relative links, e.g. 'Added [Billing API](/apis/billing-api.md).'"
   );
 
-export function buildReadTools(kb: KnowledgeBase, trace?: TraceRecorder, searchLimit?: number) {
+export interface ReadToolOptions {
+  searchLimit?: number;
+  /** Excerpt cap for read_concept bodies (full:true bypasses). */
+  readExcerptChars?: number;
+  /** Paths read in FULL this run — replace_body is gated on this. */
+  fullReads?: Set<string>;
+}
+
+const DEFAULT_READ_EXCERPT = 4000;
+
+/** Top-level "# Heading" names in a body, for the truncation notice. */
+function listSections(body: string): string[] {
+  return body
+    .split("\n")
+    .filter((l) => /^#\s+/.test(l))
+    .map((l) => l.replace(/^#\s+/, "").trim());
+}
+
+/** Content under one top-level "# Heading" (exclusive of following headings). */
+function extractSection(body: string, heading: string): string | null {
+  const normalized = heading.replace(/^#+\s*/, "").trim();
+  const lines = body.split("\n");
+  const isHeading = (line: string) => /^#\s+/.test(line);
+  const start = lines.findIndex(
+    (line) => isHeading(line) && line.replace(/^#\s+/, "").trim() === normalized
+  );
+  if (start === -1) return null;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (isHeading(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(start, end).join("\n").trim();
+}
+
+export function buildReadTools(
+  kb: KnowledgeBase,
+  trace?: TraceRecorder,
+  opts: ReadToolOptions = {}
+) {
+  const { searchLimit, fullReads } = opts;
+  const excerptChars = opts.readExcerptChars ?? DEFAULT_READ_EXCERPT;
   return {
     search_knowledge: tool({
       description:
@@ -53,12 +96,47 @@ export function buildReadTools(kb: KnowledgeBase, trace?: TraceRecorder, searchL
       },
     }),
     read_concept: tool({
-      description: "Read one concept document in full: frontmatter and markdown body.",
-      inputSchema: z.object({ path: conceptPath }),
-      execute: async ({ path }) => {
+      description:
+        "Read one concept document: frontmatter and markdown body. Long bodies are excerpted — " +
+        "the result then lists the remaining '# Section' names; re-read with section:\"Name\" for " +
+        "one section, or full:true for the whole body. You MUST read with full:true before " +
+        "rewriting a whole body via patch_concept replace_body.",
+      inputSchema: z.object({
+        path: conceptPath,
+        section: z
+          .string()
+          .optional()
+          .describe("Return only this top-level '# Section' (plus frontmatter)"),
+        full: z
+          .boolean()
+          .optional()
+          .describe("Return the entire body regardless of length"),
+      }),
+      execute: async ({ path, section, full }) => {
         const c = await kb.readConcept(path);
         trace?.record("read_concept", c.path, [c.path]);
-        return { path: c.path, frontmatter: c.frontmatter, body: c.body };
+        if (section) {
+          const content = extractSection(c.body, section);
+          if (content === null) {
+            return {
+              path: c.path,
+              frontmatter: c.frontmatter,
+              error: `No section "# ${section}" — sections present: ${listSections(c.body).join(", ") || "(none)"}`,
+            };
+          }
+          return { path: c.path, frontmatter: c.frontmatter, body: content, section };
+        }
+        if (full || c.body.length <= excerptChars) {
+          fullReads?.add(c.path);
+          return { path: c.path, frontmatter: c.frontmatter, body: c.body };
+        }
+        const sections = listSections(c.body);
+        return {
+          path: c.path,
+          frontmatter: c.frontmatter,
+          body: c.body.slice(0, excerptChars),
+          truncated: `excerpt: ${excerptChars} of ${c.body.length} chars. Sections in the full body: ${sections.join(", ") || "(no headings)"}. Re-read with section:"Name" or full:true if you need more.`,
+        };
       },
     }),
     list_directory: tool({
@@ -82,7 +160,12 @@ export function buildReadTools(kb: KnowledgeBase, trace?: TraceRecorder, searchL
   };
 }
 
-export function buildWriteTools(kb: KnowledgeBase, filesChanged: Set<string>, trace?: TraceRecorder) {
+export function buildWriteTools(
+  kb: KnowledgeBase,
+  filesChanged: Set<string>,
+  trace?: TraceRecorder,
+  fullReads?: Set<string>
+) {
   return {
     write_concept: tool({
       description:
@@ -126,6 +209,16 @@ export function buildWriteTools(kb: KnowledgeBase, filesChanged: Set<string>, tr
         log_summary: logSummary,
       }),
       execute: async ({ path, frontmatter, replace_section, replace_body, log_summary }) => {
+        // A whole-body rewrite based on a truncated read silently destroys the
+        // unseen tail. Mechanically require a full read of this concept first.
+        if (replace_body !== undefined && fullReads && !fullReads.has(kb.bundle.toBundlePath(path))) {
+          return {
+            error:
+              `replace_body rejected: you have not read ${path} in FULL this run. ` +
+              `Call read_concept with full:true first (excerpted reads hide part of the body), ` +
+              `or use replace_section for a targeted edit.`,
+          };
+        }
         const c = await kb.patchConcept(
           path,
           {

@@ -65,6 +65,8 @@ export interface AgentSettings {
   searchLimit: number | null;
   /** Max persisted trace files before pruning. */
   maxTraces: number | null;
+  /** Excerpt cap (chars) for read_concept bodies; full:true bypasses. */
+  readExcerptChars: number | null;
 }
 
 export interface SeedSettings {
@@ -105,6 +107,7 @@ export const AGENT_DEFAULTS = {
   mutationTemperature: 0.2,
   searchLimit: 20,
   maxTraces: 50,
+  readExcerptChars: 4000,
 } as const;
 
 export const SEED_DEFAULTS = {
@@ -158,7 +161,7 @@ The input is knowledge to persist or a change to apply to the knowledge base —
 
 WRITE PROTOCOL:
 1. Search for concepts the knowledge relates to or belongs to; read the strongest candidates.
-2. CHECK FOR CONTRADICTION. If the new knowledge conflicts with what an existing concept currently asserts (e.g. a changed address, a corrected number, a reversed decision), do NOT leave both claims standing and do NOT silently drop the old one. Update to the new value and make the change explicit — state that it supersedes the prior value (briefly noting what it was). A concept must never assert two contradictory facts at once. MECHANICALLY: the old statement must no longer appear anywhere in the concept. If it sits in the concept's prose (not a cleanly isolated section you can target), read the concept and use patch_concept's replace_body to rewrite the WHOLE body — never append a new section that leaves the stale statement standing above it.
+2. CHECK FOR CONTRADICTION. If the new knowledge conflicts with what an existing concept currently asserts (e.g. a changed address, a corrected number, a reversed decision), do NOT leave both claims standing and do NOT silently drop the old one. Update to the new value and make the change explicit — state that it supersedes the prior value (briefly noting what it was). A concept must never assert two contradictory facts at once. MECHANICALLY: the old statement must no longer appear anywhere in the concept. If it sits in the concept's prose (not a cleanly isolated section you can target), read the concept with full:true and use patch_concept's replace_body to rewrite the WHOLE body — never append a new section that leaves the stale statement standing above it, and never rewrite a body you have only seen an excerpt of.
 3. Decide: ENRICH or CREATE (rule 2). An attribute or detail of an existing entity is patched into that entity's concept. Only a distinct, stand-alone entity or substantial topic gets its own concept.
 4. If enriching: patch_concept the owning concept.
 5. If creating: write_concept in a fitting directory (create the directory if none fits), then LINK BOTH WAYS (rule 3) — patch each genuinely related existing concept to reference the new one.
@@ -222,7 +225,13 @@ export function emptySettings(): UnderstorySettings {
       anthropicApiKey: null,
       openrouterApiKey: null,
     },
-    agent: { maxSteps: null, mutationTemperature: null, searchLimit: null, maxTraces: null },
+    agent: {
+      maxSteps: null,
+      mutationTemperature: null,
+      searchLimit: null,
+      maxTraces: null,
+      readExcerptChars: null,
+    },
     seed: { maxChars: null, maxDescriptionsPerSegment: null },
     dream: { interval: null, insights: null },
     cache: { queryCache: null, queryCacheTtl: null, hotMemory: null, hotMemoryTtl: null },

@@ -60,6 +60,7 @@ interface RunConfig {
   maxSteps: number;
   mutationTemperature: number;
   searchLimit: number;
+  readExcerptChars: number;
   promptResolver: PromptResolver | undefined;
   traces: TraceStore;
 }
@@ -73,6 +74,7 @@ async function runConfig(kb: KnowledgeBase, options: AgentOptions): Promise<RunC
     mutationTemperature:
       s?.agentValue("mutationTemperature") ?? AGENT_DEFAULTS.mutationTemperature,
     searchLimit: s?.agentValue("searchLimit") ?? AGENT_DEFAULTS.searchLimit,
+    readExcerptChars: s?.agentValue("readExcerptChars") ?? AGENT_DEFAULTS.readExcerptChars,
     promptResolver: s ? (key) => s.prompt(key) : undefined,
     traces: new TraceStore(kb.bundle.root, s?.agentValue("maxTraces") ?? AGENT_DEFAULTS.maxTraces),
   };
@@ -169,7 +171,10 @@ export async function runQuery(
       abortSignal: modelAbortSignal(options, run.env),
       system: buildSystemPrompt(ctx, run.promptResolver),
       prompt: question,
-      tools: buildReadTools(kb, recorder, run.searchLimit),
+      tools: buildReadTools(kb, recorder, {
+        searchLimit: run.searchLimit,
+        readExcerptChars: run.readExcerptChars,
+      }),
       stopWhen: stepCountIs(run.maxSteps),
     });
     const trace = recorder.finalize("query", question, result.text, "success", modelChain, sumStepsUsage(result.steps));
@@ -191,6 +196,7 @@ export async function runMutation(
   const [ctx, run] = await Promise.all([promptContext(kb, "mutate"), runConfig(kb, options)]);
   const recorder = new TraceRecorder(options.onStep);
   const filesChanged = new Set<string>();
+  const fullReads = new Set<string>();
   let modelChain: string[] = [];
   try {
     const resolved = await resolveAgentModel(options, "mutate", run.env);
@@ -201,8 +207,12 @@ export async function runMutation(
       system: buildSystemPrompt(ctx, run.promptResolver),
       prompt: instruction,
       tools: {
-        ...buildReadTools(kb, recorder, run.searchLimit),
-        ...buildWriteTools(kb, filesChanged, recorder),
+        ...buildReadTools(kb, recorder, {
+          searchLimit: run.searchLimit,
+          readExcerptChars: run.readExcerptChars,
+          fullReads,
+        }),
+        ...buildWriteTools(kb, filesChanged, recorder, fullReads),
       },
       stopWhen: stepCountIs(run.maxSteps),
       temperature: run.mutationTemperature,
@@ -250,6 +260,7 @@ export async function streamChat(
   const [ctx, run] = await Promise.all([promptContext(kb, "chat"), runConfig(kb, options)]);
   const recorder = new TraceRecorder(options.onStep);
   const filesChanged = new Set<string>();
+  const fullReads = new Set<string>();
   let modelChain: string[] = [];
   // The user turn that started this run, for the trace record.
   const lastUser = [...messages].reverse().find((m) => m.role === "user");
@@ -270,8 +281,12 @@ export async function streamChat(
       system: buildSystemPrompt(ctx, run.promptResolver),
       messages,
       tools: {
-        ...buildReadTools(kb, recorder, run.searchLimit),
-        ...buildWriteTools(kb, filesChanged, recorder),
+        ...buildReadTools(kb, recorder, {
+          searchLimit: run.searchLimit,
+          readExcerptChars: run.readExcerptChars,
+          fullReads,
+        }),
+        ...buildWriteTools(kb, filesChanged, recorder, fullReads),
       },
       stopWhen: stepCountIs(run.maxSteps),
       onFinish: async ({ text, totalUsage }) => {
