@@ -15,7 +15,7 @@
     "typecheck:test": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@understory/core": "workspace:*",
     "ai": "^5.0.0",
     "cors": "^2.8.5",
