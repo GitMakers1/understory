@@ -1,20 +1,38 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, setAuthToken, type AppConfig, type Concept, type ConformanceReport, type LogEntry, type SearchHit, type TreeNode } from "./api";
+import { api, ApiError, getCurrentProject, setAuthToken, setCurrentProject, type AppConfig, type Concept, type ConformanceReport, type LogEntry, type ProjectInfo, type SearchHit, type TreeNode } from "./api";
 import { Tree } from "./components/Tree";
 import { ConceptView } from "./components/ConceptView";
 import { LogView } from "./components/LogView";
 import { ChatPanel } from "./components/ChatPanel";
 import { GraphView } from "./components/GraphView";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { ProjectsView } from "./components/ProjectsView";
 
 type View =
   | { kind: "concept"; path: string }
   | { kind: "log" }
   | { kind: "graph" }
   | { kind: "settings" }
+  | { kind: "projects" }
   | { kind: "empty" };
 
 export default function App() {
+  // Remounting the whole layout on project switch resets every scoped view.
+  const [project, setProject] = useState(getCurrentProject());
+  const switchProject = useCallback((id: string) => {
+    setCurrentProject(id);
+    setProject(id);
+  }, []);
+  return <ProjectApp key={project} project={project} onSwitchProject={switchProject} />;
+}
+
+function ProjectApp({
+  project,
+  onSwitchProject,
+}: {
+  project: string;
+  onSwitchProject: (id: string) => void;
+}) {
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [report, setReport] = useState<ConformanceReport | null>(null);
@@ -43,9 +61,11 @@ export default function App() {
     api.log().then(setLog).catch(() => {});
   }, []);
 
+  const [projects, setProjects] = useState<ProjectInfo[]>([]);
   useEffect(() => {
     refresh();
     api.config().then(setConfig).catch(() => {});
+    api.projects().then(setProjects).catch(() => {});
   }, [refresh]);
 
   useEffect(() => {
@@ -124,6 +144,22 @@ export default function App() {
         <div className="border-b border-zinc-800 p-3">
           <div className="flex items-center gap-2">
             <h1 className="text-sm font-bold tracking-wide text-cyan-300">understory 🌱</h1>
+            {projects.length > 1 && (
+              <select
+                value={project}
+                onChange={(e) => onSwitchProject(e.target.value)}
+                title="Switch project"
+                className="max-w-[9rem] rounded border border-zinc-700 bg-zinc-900 px-1 py-0.5 text-xs text-zinc-200 outline-none focus:border-cyan-600"
+              >
+                {projects
+                  .filter((p) => !p.archived || p.id === project)
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.conceptCount})
+                    </option>
+                  ))}
+              </select>
+            )}
             {report && (
               <span
                 title={`${report.conceptCount} concepts, ${report.issues.length} issues`}
@@ -185,6 +221,13 @@ export default function App() {
             Graph
           </button>
           <button
+            onClick={() => setView({ kind: "projects" })}
+            title="Projects"
+            className={`flex-1 border-l border-zinc-800 px-3 py-2 hover:bg-zinc-800 ${view.kind === "projects" ? "text-cyan-300" : "text-zinc-400"}`}
+          >
+            ▤
+          </button>
+          <button
             onClick={() => setView({ kind: "settings" })}
             title="Settings"
             className={`flex-1 border-l border-zinc-800 px-3 py-2 hover:bg-zinc-800 ${view.kind === "settings" ? "text-cyan-300" : "text-zinc-400"}`}
@@ -216,6 +259,7 @@ export default function App() {
           <GraphView refreshKey={graphRefreshKey} onNavigate={openConcept} />
         )}
         {!error && view.kind === "settings" && <SettingsPanel />}
+        {!error && view.kind === "projects" && <ProjectsView onSwitch={onSwitchProject} />}
       </main>
 
       {/* Chat */}

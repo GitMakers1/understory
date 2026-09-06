@@ -193,6 +193,36 @@ export interface SettingsResponse {
   secretSentinel: string;
 }
 
+// ── Projects ──────────────────────────────────────────────────────────
+
+export interface ProjectInfo {
+  id: string;
+  name: string;
+  description: string;
+  createdAt: string;
+  archived?: boolean;
+  descriptionStale?: boolean;
+  conceptCount: number;
+  types: string[];
+  healthy: boolean;
+}
+
+const PROJECT_KEY = "understory-project";
+
+export function getCurrentProject(): string {
+  return localStorage.getItem(PROJECT_KEY) ?? "default";
+}
+
+export function setCurrentProject(id: string): void {
+  localStorage.setItem(PROJECT_KEY, id);
+}
+
+/** Scope a /api URL to the currently selected project. */
+export function withProject(url: string): string {
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}project=${encodeURIComponent(getCurrentProject())}`;
+}
+
 const TOKEN_KEY = "understory-token";
 
 export function getAuthToken(): string {
@@ -233,17 +263,45 @@ async function put<T>(url: string, body: unknown): Promise<T> {
   return res.json();
 }
 
+async function post<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(res.status, `${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+async function patchReq<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(res.status, `${res.status} ${await res.text()}`);
+  return res.json();
+}
+
 export const api = {
-  tree: () => get<TreeNode>("/api/tree"),
-  concept: (path: string) => get<Concept>(`/api/concept?path=${encodeURIComponent(path)}`),
-  search: (q: string) => get<SearchHit[]>(`/api/search?q=${encodeURIComponent(q)}`),
-  log: () => get<LogEntry[]>("/api/log"),
-  validate: () => get<ConformanceReport>("/api/validate"),
-  graph: () => get<GraphData>("/api/graph"),
-  traces: () => get<TraceSummary[]>("/api/traces"),
-  trace: (id: string) => get<QueryTrace>(`/api/trace?id=${encodeURIComponent(id)}`),
+  tree: () => get<TreeNode>(withProject("/api/tree")),
+  concept: (path: string) =>
+    get<Concept>(withProject(`/api/concept?path=${encodeURIComponent(path)}`)),
+  search: (q: string) => get<SearchHit[]>(withProject(`/api/search?q=${encodeURIComponent(q)}`)),
+  log: () => get<LogEntry[]>(withProject("/api/log")),
+  validate: () => get<ConformanceReport>(withProject("/api/validate")),
+  graph: () => get<GraphData>(withProject("/api/graph")),
+  traces: () => get<TraceSummary[]>(withProject("/api/traces")),
+  trace: (id: string) => get<QueryTrace>(withProject(`/api/trace?id=${encodeURIComponent(id)}`)),
   config: () => get<AppConfig>("/api/config"),
   settings: () => get<SettingsResponse>("/api/settings"),
   saveSettings: (patch: Partial<UnderstorySettings>) =>
     put<{ settings: UnderstorySettings }>("/api/settings", patch),
+  projects: () => get<ProjectInfo[]>("/api/projects"),
+  createProject: (name: string, description: string) =>
+    post<ProjectInfo>("/api/projects", { name, description }),
+  updateProject: (id: string, patch: { name?: string; description?: string; archived?: boolean }) =>
+    patchReq<ProjectInfo>(`/api/projects/${encodeURIComponent(id)}`, patch),
+  describeProject: (id: string) =>
+    post<ProjectInfo>(`/api/projects/${encodeURIComponent(id)}/describe`, {}),
 };
