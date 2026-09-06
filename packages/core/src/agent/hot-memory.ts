@@ -149,12 +149,16 @@ const defaultGenerate: HotGenerate = async (system, prompt, options) => {
     await options.settings.load();
     env = options.settings.effectiveEnv();
   }
-  let model;
-  if (typeof providers.resolveModel === "function") {
-    model = await providers.resolveModel((options as any).provider, options.model, env);
-  } else {
-    const cfg = providers.resolveModelConfig(env);
-    model = await providers.createModel(options.model ? { ...cfg, model: options.model } : cfg);
+  const cfg = providers.resolveModelConfig(env);
+  let model = await providers.createModel(options.model ? { ...cfg, model: options.model } : cfg);
+  // Same fallback protection as the deep agent — a wedged primary must not
+  // take the hot layer down with it.
+  const fallbackCfg = providers.resolveFallbackConfig(env);
+  if (fallbackCfg) {
+    const { withFallback } = await import("../providers/fallback.js");
+    model = withFallback(model, await providers.createModel(fallbackCfg), {
+      retry429: env.LLM_FALLBACK_RETRY_429 === "true",
+    });
   }
   const { generateText } = await import("ai");
   const result = await generateText({

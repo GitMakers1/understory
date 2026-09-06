@@ -83,8 +83,15 @@ export async function runQueryCached(
 
   // Layer 2: hot working set — recently written concepts + recent answers,
   // one tool-free LLM call. A confident hot answer also lands in the exact
-  // cache so identical repeats become instant.
-  const hotAnswer = await hot(kb, question, options);
+  // cache so identical repeats become instant. The hot layer is an
+  // OPTIMIZATION: any failure here falls through to the deep agent (which
+  // has fallback-model protection) instead of killing the query.
+  let hotAnswer: string | null = null;
+  try {
+    hotAnswer = await hot(kb, question, options);
+  } catch (err) {
+    console.error(`[understory] hot lookup failed (falling through to deep): ${(err as Error).message}`);
+  }
   if (hotAnswer !== null) {
     const result: QueryResult = { answer: hotAnswer, steps: 0, traceId: "" };
     store(key, result, ttl);
