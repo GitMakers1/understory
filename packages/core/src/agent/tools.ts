@@ -179,7 +179,7 @@ export function buildWriteTools(
       execute: async ({ path, frontmatter, body, log_summary }) => {
         const c = await kb.writeConcept(path, frontmatter, body, log_summary);
         filesChanged.add(c.path);
-        recordHotWrite(c.path);
+        recordHotWrite(kb.bundle.root, c.path);
         trace?.record("write_concept", c.path, [c.path], true);
         return { written: c.path };
       },
@@ -231,7 +231,7 @@ export function buildWriteTools(
           log_summary
         );
         filesChanged.add(c.path);
-        recordHotWrite(c.path);
+        recordHotWrite(kb.bundle.root, c.path);
         trace?.record("patch_concept", c.path, [c.path], true);
         return { patched: c.path };
       },
@@ -246,7 +246,7 @@ export function buildWriteTools(
       execute: async ({ path, log_summary }) => {
         await kb.deleteConcept(path, log_summary);
         filesChanged.add(path);
-        recordHotDelete(path);
+        recordHotDelete(kb.bundle.root, path);
         trace?.record("delete_concept", path, [path], true);
         return { deleted: path };
       },
