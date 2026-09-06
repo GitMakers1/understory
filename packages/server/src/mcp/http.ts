@@ -1,16 +1,19 @@
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Request, Response, Router } from "express";
 import express from "express";
-import type { KnowledgeBase, SettingsStore } from "@understory/core";
+import { DEFAULT_PROJECT_ID, type ProjectManager, type SettingsStore } from "@understory/core";
 import { buildMcpServer } from "./server.js";
 
 /**
  * MCP streamable-HTTP at /mcp. Stateless: a fresh McpServer + transport per
- * request (no session store) — the KB itself serializes mutations. Express
- * hands the SDK transport the raw Node req/res directly, so there is no
- * hijack/lifecycle glue and CORS is handled by the app-level cors() middleware.
+ * request (no session store) — the KB itself serializes mutations.
+ *
+ * `/mcp?project=<id>` binds the session's DEFAULT project (per registration:
+ * different agents can point the same server at different home projects);
+ * every tool still accepts an explicit `project` argument for cross-project
+ * access.
  */
-export function mcpRouter(kb: KnowledgeBase, store?: SettingsStore): Router {
+export function mcpRouter(pm: ProjectManager, store?: SettingsStore): Router {
   const router = express.Router();
 
   const handle = async (req: Request, res: Response) => {
@@ -18,7 +21,8 @@ export function mcpRouter(kb: KnowledgeBase, store?: SettingsStore): Router {
     const abortRequest = () => requestAbort.abort();
     req.once("aborted", abortRequest);
 
-    const server = await buildMcpServer(kb, store, requestAbort.signal);
+    const defaultProject = String(req.query.project ?? DEFAULT_PROJECT_ID);
+    const server = await buildMcpServer(pm, store, requestAbort.signal, defaultProject);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless
       // SSE per request (not buffered JSON): progress notifications must reach

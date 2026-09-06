@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
 import {
-  KnowledgeBase,
+  ProjectManager,
   SettingsStore,
   resolveFallbackConfig,
   resolveModelConfig,
@@ -13,26 +13,37 @@ import { mcpRouter } from "./mcp/http.js";
 import { browseRouter } from "./api/browse.js";
 import { chatRouter } from "./api/chat.js";
 import { settingsRouter } from "./api/settings.js";
+import { projectsRouter } from "./api/projects.js";
 import { bearerAuth } from "./auth.js";
 import { startDreamer } from "./dreamer.js";
 
+// Multi-project layout. BUNDLE_ROOT (legacy single bundle) is registered as
+// the "default" project by reference — its files never move, and it keeps
+// holding the global settings store.
 const bundleRoot = process.env.BUNDLE_ROOT;
-if (!bundleRoot) {
-  console.error("BUNDLE_ROOT env var is required");
+const projectsRoot =
+  process.env.PROJECTS_ROOT ??
+  (bundleRoot ? path.join(bundleRoot, "..", "understory-projects") : undefined);
+if (!projectsRoot) {
+  console.error("BUNDLE_ROOT or PROJECTS_ROOT env var is required");
   process.exit(1);
 }
 
-const store = new SettingsStore(bundleRoot);
+const store = new SettingsStore(bundleRoot ?? projectsRoot);
 await store.load();
 // Dream/cache knobs are read from process.env by their modules — apply
 // persisted overrides once at boot (changes there need a restart).
 store.applyProcessEnv();
 
-const kb = new KnowledgeBase(bundleRoot, {
+const pm = new ProjectManager(projectsRoot, bundleRoot, {
   gitAutocommit: store.raw().gitAutocommit ?? process.env.GIT_AUTOCOMMIT === "true",
 });
+await pm.load();
+console.log(
+  `[understory] projects: ${pm.list().map((p) => p.id).join(", ")} (registry: ${projectsRoot})`
+);
 
-startDreamer(kb, { settings: store });
+startDreamer(pm, { settings: store });
 
 const app = express();
 
@@ -87,12 +98,17 @@ if (authToken) {
 
 const port = Number(process.env.PORT ?? 3800);
 
-app.use("/mcp", mcpRouter(kb, store));
-app.use("/api", browseRouter(kb, store));
-app.use("/api", chatRouter(kb, store));
+app.use("/mcp", mcpRouter(pm, store));
+app.use("/api", browseRouter(pm, store));
+app.use("/api", chatRouter(pm, store));
+app.use("/api", projectsRouter(pm, store));
 app.use(
   "/api",
-  settingsRouter(store, { bundleRoot: kb.bundle.root, port, authEnabled: Boolean(authToken) })
+  settingsRouter(store, {
+    bundleRoot: bundleRoot ?? projectsRoot,
+    port,
+    authEnabled: Boolean(authToken),
+  })
 );
 
 // Serve the built web UI in production (single container), with SPA fallback.

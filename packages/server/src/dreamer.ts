@@ -1,13 +1,14 @@
-import { parseDuration, runDream, type AgentOptions, type KnowledgeBase } from "@understory/core";
+import { parseDuration, runDream, type AgentOptions, type ProjectManager } from "@understory/core";
 
 const MIN_INTERVAL_MS = 5 * 60_000;
 
 /**
  * Background dreamer: runs a consolidation pass every DREAM_INTERVAL
- * (e.g. "6h"). Opt-in — unset means no background token spend. The first
- * run happens one interval after boot, never at startup.
+ * (e.g. "6h") over every non-archived project, sequentially. Opt-in — unset
+ * means no background token spend. Signal-gated per project, so healthy
+ * projects cost nothing. The first run happens one interval after boot.
  */
-export function startDreamer(kb: KnowledgeBase, options: AgentOptions = {}): void {
+export function startDreamer(pm: ProjectManager, options: AgentOptions = {}): void {
   const raw = process.env.DREAM_INTERVAL;
   const interval = parseDuration(raw);
   if (!interval) {
@@ -20,19 +21,25 @@ export function startDreamer(kb: KnowledgeBase, options: AgentOptions = {}): voi
 
   let busy = false;
   const timer = setInterval(async () => {
-    if (busy) return; // never overlap dreams
+    if (busy) return; // never overlap dream passes
     busy = true;
     try {
-      const report = await runDream(kb, options);
-      if (report.ran) {
-        console.log(
-          `[understory] dream complete: ${report.filesChanged?.length ?? 0} file(s) changed — ${truncate(report.summary ?? "", 200)}`
-        );
-      } else {
-        console.log(`[understory] dream skipped: ${report.reason}`);
+      await pm.load();
+      for (const project of pm.list()) {
+        try {
+          const report = await runDream(pm.kb(project.id), options);
+          if (report.ran) {
+            pm.markActivity(project.id);
+            console.log(
+              `[understory] dream(${project.id}) complete: ${report.filesChanged?.length ?? 0} file(s) changed — ${truncate(report.summary ?? "", 200)}`
+            );
+          } else {
+            console.log(`[understory] dream(${project.id}) skipped: ${report.reason}`);
+          }
+        } catch (err) {
+          console.error(`[understory] dream(${project.id}) failed: ${(err as Error).message}`);
+        }
       }
-    } catch (err) {
-      console.error(`[understory] dream failed: ${(err as Error).message}`);
     } finally {
       busy = false;
     }

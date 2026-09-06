@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 /**
  * MCP over stdio — register in Claude Code / Claude Desktop:
- *   claude mcp add okf-kb -e BUNDLE_ROOT=/path/to/bundle -e OPENROUTER_API_KEY=... \
- *     -e LLM_PROVIDER=openrouter -- node <repo>/packages/server/dist/mcp/stdio.js
+ *   claude mcp add okf-kb -e BUNDLE_ROOT=/path/to/bundle \
+ *     -- node <repo>/packages/server/dist/mcp/stdio.js
+ *
+ * Multi-project: set PROJECTS_ROOT (and optionally UNDERSTORY_PROJECT for the
+ * session default). Single-bundle: set BUNDLE_ROOT — it becomes project
+ * "default", same as before.
  */
+import path from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
-  KnowledgeBase,
+  DEFAULT_PROJECT_ID,
+  ProjectManager,
   SettingsStore,
   resolveFallbackConfig,
   resolveModelConfig,
@@ -14,13 +20,17 @@ import {
 import { buildMcpServer } from "./server.js";
 
 const bundleRoot = process.env.BUNDLE_ROOT;
-if (!bundleRoot) {
-  console.error("BUNDLE_ROOT env var is required");
+const projectsRoot =
+  process.env.PROJECTS_ROOT ??
+  (bundleRoot ? path.join(bundleRoot, "..", "understory-projects") : undefined);
+if (!projectsRoot) {
+  console.error("BUNDLE_ROOT or PROJECTS_ROOT env var is required");
   process.exit(1);
 }
 
-const store = new SettingsStore(bundleRoot);
+const store = new SettingsStore(bundleRoot ?? projectsRoot);
 await store.load();
+store.applyProcessEnv();
 
 // Validate LLM config at startup — fail fast with a clear error. stdio's
 // only output channel to the user is stderr; stdout is reserved for the
@@ -43,10 +53,15 @@ try {
   process.exit(1);
 }
 
-const kb = new KnowledgeBase(bundleRoot, {
+const pm = new ProjectManager(projectsRoot, bundleRoot, {
   gitAutocommit: store.raw().gitAutocommit ?? process.env.GIT_AUTOCOMMIT === "true",
 });
-const server = await buildMcpServer(kb, store);
+await pm.load();
+
+const defaultProject = process.env.UNDERSTORY_PROJECT ?? DEFAULT_PROJECT_ID;
+const server = await buildMcpServer(pm, store, undefined, defaultProject);
 await server.connect(new StdioServerTransport());
 // stdio transport keeps the process alive; logs must go to stderr only.
-console.error(`[understory] serving bundle ${bundleRoot} over stdio`);
+console.error(
+  `[understory] serving projects [${pm.list().map((p) => p.id).join(", ")}] over stdio (default: ${defaultProject})`
+);

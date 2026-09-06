@@ -6,36 +6,89 @@ import {
   runQueryCached,
   renderTemplate,
   DEFAULT_PROMPTS,
+  DEFAULT_PROJECT_ID,
+  UnknownProjectError,
   type MutationOutcome,
+  type ProjectManager,
   type SettingsStore,
 } from "@understory/core";
 import { buildSeedMemory, seedInstructions, type SeedOptions } from "./seed.js";
 
 /**
- * Build the OKF MCP server. Each knowledge tool internally drives the LLM
- * agent (OKF spec in its system prompt) against the bundle.
- * Transport-agnostic — used by both the stdio bin and the HTTP endpoint.
+ * Build the OKF MCP server over ALL projects. Each knowledge tool internally
+ * drives the LLM agent against one project's bundle; a super index of every
+ * project (name + description) is injected at session start so the client
+ * agent knows where to search. Projects are created ONLY via the web UI —
+ * this surface has no creation tool, and unknown project ids are rejected
+ * with a pointer to the UI.
  *
- * Seed memory: a session-start overview of what the KB contains, injected via
- * BOTH channels that reach the client LLM — the initialize `instructions`
- * field (standards channel) and the memory_query tool description (universal
- * fallback; every tool-calling client loads descriptions). Without it the
- * client model has no signal that memory might hold an answer.
+ * Transport-agnostic — used by both the stdio bin and the HTTP endpoint.
  */
 export async function buildMcpServer(
-  kb: KnowledgeBase,
+  pm: ProjectManager,
   store?: SettingsStore,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  defaultProjectId: string = DEFAULT_PROJECT_ID
 ): Promise<McpServer> {
   if (store) await store.load();
+  await pm.load();
+  if (!pm.get(defaultProjectId)) defaultProjectId = DEFAULT_PROJECT_ID;
   const agentOptions = { settings: store, abortSignal };
+
+  const seedOptions = (): SeedOptions =>
+    store
+      ? {
+          maxChars: store.seedValue("maxChars"),
+          maxDescriptionsPerSegment: store.seedValue("maxDescriptionsPerSegment"),
+        }
+      : {};
+
+  /** Resolve a tool's project param (default: this session's project). Throws UnknownProjectError. */
+  const projectKb = (project?: string): { id: string; kb: KnowledgeBase } => {
+    const id = project?.trim() || defaultProjectId;
+    return { id, kb: pm.kb(id) };
+  };
+
+  const unknownProjectResponse = (err: unknown) => ({
+    content: [{ type: "text" as const, text: (err as Error).message }],
+    isError: true,
+  });
+
+  const projectParam = z
+    .string()
+    .optional()
+    .describe(
+      `Project (knowledge base) to operate on. Defaults to "${defaultProjectId}". ` +
+        `See the PROJECTS list for what lives where. Projects are created only in the web UI.`
+    );
+
+  // Seed generation must never prevent the server from starting.
+  const superIndex = await pm.superIndex().catch(() => "(project index unavailable)");
+  const seed = await buildSeedMemory(pm.kb(defaultProjectId), seedOptions()).catch((err: Error) => {
+    console.error(`[understory] seed generation failed: ${err.message}`);
+    return "(memory overview unavailable — the bundle may be empty or unreadable; memory_status can diagnose)";
+  });
+
+  const seedWithIndex = (s: string) =>
+    `PROJECTS (separate knowledge bases on this server — pass project:"<id>" to reach one):\n${superIndex}\n\n` +
+    `CURRENT PROJECT: ${defaultProjectId}\n\n${s}`;
+
+  const queryDescription = (s: string) =>
+    `Ask a natural-language question. An internal agent searches the OKF knowledge base, ` +
+    `reads relevant concepts, and answers with cited bundle paths. Use the optional "project" ` +
+    `argument to query a different project; memory_search_index finds which project knows about a topic.\n\n` +
+    `CURRENT MEMORY OVERVIEW:\n${seedWithIndex(s)}`;
+
+  const server = new McpServer(
+    { name: "understory", version: "0.1.0" },
+    { instructions: seedInstructions(seedWithIndex(seed), store?.prompt("seedInstructions")) }
+  );
 
   /**
    * Per-request agent options with live progress. When the client sent a
    * progressToken, every internal tool call streams a notifications/progress —
    * the user sees the agent working, and spec-compliant clients reset their
-   * request timeout on each notification, so long runs stop dying at the
-   * client's flat timeout.
+   * request timeout on each notification.
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const withProgress = (extra: any) => {
@@ -59,47 +112,28 @@ export async function buildMcpServer(
       },
     };
   };
-  const seedOptions = (): SeedOptions =>
-    store
-      ? {
-          maxChars: store.seedValue("maxChars"),
-          maxDescriptionsPerSegment: store.seedValue("maxDescriptionsPerSegment"),
-        }
-      : {};
-  // Seed generation must never prevent the server from starting — a missing
-  // or empty bundle root degrades to a minimal seed, not a crash.
-  const seed = await buildSeedMemory(kb, seedOptions()).catch((err: Error) => {
-    console.error(`[understory] seed generation failed: ${err.message}`);
-    return "(memory overview unavailable — the bundle may be empty or unreadable; memory_status can diagnose)";
-  });
-
-  const queryDescription = (s: string) =>
-    `Ask a natural-language question. An internal agent searches the OKF knowledge base, ` +
-    `reads relevant concepts, and answers with cited bundle paths.\n\n` +
-    `CURRENT MEMORY OVERVIEW:\n${s}`;
-
-  const server = new McpServer(
-    { name: "understory", version: "0.1.0" },
-    { instructions: seedInstructions(seed, store?.prompt("seedInstructions")) }
-  );
 
   const queryTool = server.registerTool(
     "memory_query",
     {
       title: "Query the knowledge base",
       description: queryDescription(seed),
-      inputSchema: { question: z.string().describe("The question to answer") },
+      inputSchema: {
+        question: z.string().describe("The question to answer"),
+        project: projectParam,
+      },
     },
-    async ({ question }, extra) => {
+    async ({ question, project }, extra) => {
       try {
+        const { id, kb } = projectKb(project);
         const { answer, source } = await runQueryCached(kb, question, withProgress(extra));
         const marker = source === "cache" ? "\n\n(cached answer)" : source === "hot" ? "\n\n(hot memory)" : "";
+        const projectMarker = id !== defaultProjectId ? `\n\n(project: ${id})` : "";
         return {
-          content: [{ type: "text", text: `${answer}${marker}` }],
+          content: [{ type: "text", text: `${answer}${marker}${projectMarker}` }],
         };
       } catch (err) {
-        // Aborted/timed-out runs return a readable explanation instead of an
-        // opaque transport error, so the caller knows what happened.
+        if (err instanceof UnknownProjectError) return unknownProjectResponse(err);
         return {
           content: [
             {
@@ -116,13 +150,11 @@ export async function buildMcpServer(
   /**
    * Re-derive the seed after a mutation and push it into memory_query's
    * description; RegisteredTool.update() emits tools/list_changed so
-   * long-lived (stdio) sessions see the fresh overview. Best-effort — a
-   * refresh failure must never fail the mutation that triggered it.
-   * (Instructions can't be updated mid-session; they refresh per session.)
+   * long-lived (stdio) sessions see the fresh overview. Best-effort.
    */
   const refreshSeed = async () => {
     try {
-      const fresh = await buildSeedMemory(kb, seedOptions());
+      const fresh = await buildSeedMemory(pm.kb(defaultProjectId), seedOptions());
       queryTool.update({ description: queryDescription(fresh) });
     } catch (err) {
       console.error(`[understory] seed refresh failed: ${(err as Error).message}`);
@@ -158,6 +190,46 @@ export async function buildMcpServer(
   };
 
   server.registerTool(
+    "memory_search_index",
+    {
+      title: "Search across all projects",
+      description:
+        "Deterministic keyword search across EVERY project at once (no LLM, instant). " +
+        "Returns hits labeled by project — use it to find WHICH knowledge base covers a topic, " +
+        "then memory_query that project for a full answer.",
+      inputSchema: {
+        query: z.string().describe("Keywords to search for"),
+      },
+    },
+    async ({ query }) => {
+      await pm.load();
+      const out: string[] = [];
+      for (const p of pm.list()) {
+        try {
+          const hits = await pm.kb(p.id).search(query, { limit: 5 });
+          for (const h of hits) {
+            out.push(
+              `[${p.id}] ${h.path} (${h.type})${h.title ? ` — ${h.title}` : ""}${h.snippet ? `: ${h.snippet.slice(0, 120)}` : ""}`
+            );
+          }
+        } catch {
+          // unreadable project skipped
+        }
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: out.length
+              ? `Matches across projects:\n${out.join("\n")}`
+              : `No keyword matches in any project. Search is literal — retry with synonyms, or check the PROJECTS list and memory_query the most plausible project.`,
+          },
+        ],
+      };
+    }
+  );
+
+  server.registerTool(
     "memory_add",
     {
       title: "Add knowledge",
@@ -169,19 +241,26 @@ export async function buildMcpServer(
           .string()
           .optional()
           .describe('Optional bundle path hint, e.g. "/apis/payments.md"'),
+        project: projectParam,
       },
     },
-    async ({ content, suggested_path }, extra) => {
-      // Wrap the payload as an explicit directive. Bare content (e.g. a plain
-      // fact like "The user's name is Anirban Kar.") otherwise reads as a chat
-      // message and the agent replies conversationally instead of persisting it.
+    async ({ content, suggested_path, project }, extra) => {
+      let target;
+      try {
+        target = projectKb(project);
+      } catch (err) {
+        return unknownProjectResponse(err);
+      }
+      // Wrap the payload as an explicit directive. Bare content otherwise reads
+      // as a chat message and the agent replies instead of persisting.
       const template = store?.prompt("addWrapper") ?? DEFAULT_PROMPTS.addWrapper;
       const instruction = renderTemplate(template, {
         CONTENT: content,
         PATH_HINT: suggested_path ? `\n\nIf it fits, place new content at ${suggested_path}.` : "",
       });
-      const outcome = await runMutation(kb, instruction, withProgress(extra));
-      await refreshSeed();
+      const outcome = await runMutation(target.kb, instruction, withProgress(extra));
+      if (outcome.ok) pm.markActivity(target.id);
+      if (target.id === defaultProjectId) await refreshSeed();
       return mutationOutcomeResponse(outcome);
     }
   );
@@ -194,11 +273,19 @@ export async function buildMcpServer(
         "Instruct a change to existing knowledge (correct a fact, deprecate a concept, restructure). An internal agent locates the concepts and applies targeted edits.",
       inputSchema: {
         instruction: z.string().describe("What to change, in natural language"),
+        project: projectParam,
       },
     },
-    async ({ instruction }, extra) => {
-      const outcome = await runMutation(kb, instruction, withProgress(extra));
-      await refreshSeed();
+    async ({ instruction, project }, extra) => {
+      let target;
+      try {
+        target = projectKb(project);
+      } catch (err) {
+        return unknownProjectResponse(err);
+      }
+      const outcome = await runMutation(target.kb, instruction, withProgress(extra));
+      if (outcome.ok) pm.markActivity(target.id);
+      if (target.id === defaultProjectId) await refreshSeed();
       return mutationOutcomeResponse(outcome);
     }
   );
@@ -208,17 +295,35 @@ export async function buildMcpServer(
     {
       title: "Knowledge base status",
       description:
-        "Deterministic (no LLM): bundle statistics and OKF conformance report.",
-      inputSchema: {},
+        "Deterministic (no LLM): project list plus bundle statistics and OKF conformance for one project.",
+      inputSchema: { project: projectParam },
     },
-    async () => {
+    async ({ project }) => {
+      let target;
+      try {
+        target = projectKb(project);
+      } catch (err) {
+        return unknownProjectResponse(err);
+      }
+      const kb = target.kb;
       const [report, lint, types] = await Promise.all([kb.validate(), kb.lint(), kb.listTypes()]);
+      const projects = await Promise.all(
+        pm.list().map(async (p) => {
+          try {
+            const s = await pm.stats(p.id);
+            return { id: p.id, name: p.name, concepts: s.conceptCount, description: p.description };
+          } catch {
+            return { id: p.id, name: p.name, concepts: -1, description: p.description };
+          }
+        })
+      );
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify(
               {
+                project: target.id,
                 conformant: report.conformant,
                 concepts: report.conceptCount,
                 directories: report.directoryCount,
@@ -231,6 +336,7 @@ export async function buildMcpServer(
                   brokenLinks: lint.brokenLinks.length,
                   healthy: lint.healthy,
                 },
+                allProjects: projects,
               },
               null,
               2
@@ -246,17 +352,24 @@ export async function buildMcpServer(
     {
       title: "Maintain / repair memory",
       description:
-        "Health-check and repair the knowledge graph: an internal agent wires orphaned concepts (nothing links to them) into related concepts and fixes broken links. Run periodically to counter drift. No-op when the graph is already healthy.",
-      inputSchema: {},
+        "Health-check and repair the knowledge graph of one project: an internal agent wires orphaned concepts into related concepts and fixes broken links. No-op when healthy.",
+      inputSchema: { project: projectParam },
     },
-    async (_args, extra) => {
+    async ({ project }, extra) => {
+      let target;
+      try {
+        target = projectKb(project);
+      } catch (err) {
+        return unknownProjectResponse(err);
+      }
+      const kb = target.kb;
       const before = await kb.lint();
       if (before.healthy) {
         return {
           content: [
             {
               type: "text",
-              text: `Memory is healthy — ${before.conceptCount} concepts, ${before.linkCount} links, no orphans, no broken links. Nothing to repair.`,
+              text: `Memory (${target.id}) is healthy — ${before.conceptCount} concepts, ${before.linkCount} links, no orphans, no broken links. Nothing to repair.`,
             },
           ],
         };
@@ -275,7 +388,8 @@ export async function buildMcpServer(
       });
 
       const outcome = await runMutation(kb, instruction, withProgress(extra));
-      await refreshSeed();
+      if (outcome.ok) pm.markActivity(target.id);
+      if (target.id === defaultProjectId) await refreshSeed();
       if (!outcome.ok) return mutationOutcomeResponse(outcome);
       const { summary, filesChanged } = outcome.result;
       const after = await kb.lint();
@@ -285,7 +399,7 @@ export async function buildMcpServer(
             type: "text",
             text:
               `${summary}\n\n` +
-              `Graph health: orphans ${before.orphans.length} → ${after.orphans.length}, ` +
+              `Graph health (${target.id}): orphans ${before.orphans.length} → ${after.orphans.length}, ` +
               `broken links ${before.brokenLinks.length} → ${after.brokenLinks.length}.\n` +
               `Files changed:\n${filesChanged.map((f) => `- ${f}`).join("\n") || "- none"}`,
           },
