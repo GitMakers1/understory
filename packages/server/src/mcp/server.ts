@@ -54,12 +54,20 @@ export async function buildMcpServer(
     isError: true,
   });
 
+  // The available-projects list rides IN the param description — the model
+  // sees its options at the exact moment it picks where to read/write,
+  // even in clients that never surface the initialize instructions.
+  const projectChoices = pm
+    .list()
+    .map((p) => `"${p.id}"${p.name !== p.id ? ` (${p.name})` : ""}`)
+    .join(", ");
   const projectParam = z
     .string()
     .optional()
     .describe(
       `Project (knowledge base) to operate on. Defaults to "${defaultProjectId}". ` +
-        `See the PROJECTS list for what lives where. Projects are created only in the web UI.`
+        `Available: ${projectChoices}. Route by content — see the PROJECTS overview for ` +
+        `what belongs where. Projects are created only in the web UI.`
     );
 
   // Seed generation must never prevent the server from starting.
